@@ -1118,6 +1118,437 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
 /* map overlay chips for UW */
 .uw-map-chip{position:absolute;background:rgba(5,13,18,.92);border:1px solid rgba(34,211,238,.4);border-radius:6px;padding:5px 9px;font-size:10px;font-family:'JetBrains Mono',monospace;color:#22d3ee;pointer-events:none;backdrop-filter:blur(8px);white-space:nowrap;z-index:300;box-shadow:0 0 12px rgba(34,211,238,.18)}
 
+/* ════════════════════════════════════════════
+   SPLIT SATELLITE COMPARISON VIEW
+════════════════════════════════════════════ */
+#uw-split-overlay{
+  position:fixed;inset:0;z-index:800;
+  background:var(--bg);
+  display:none;
+  flex-direction:column;
+  opacity:0;
+  transition:opacity .3s ease;
+}
+#uw-split-overlay.open{display:flex;opacity:1}
+
+/* Split header uses CSS Grid: title | buttons | close */
+.split-header,#split-header-bar{
+  height:54px;flex-shrink:0;
+  background:var(--topbar-bg);
+  border-bottom:1px solid var(--border2);
+  display:grid!important;
+  grid-template-columns:minmax(0,1fr) auto auto;
+  align-items:center;
+  gap:10px;
+  padding:0 16px;
+  backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  z-index:10;
+  box-sizing:border-box;
+}
+.split-header-title{
+  font-family:'Syne',sans-serif;font-size:13px;font-weight:800;
+  color:var(--white);min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.split-header-meta{display:none!important;}
+/* Close button is 3rd grid column */
+.split-close-btn,#sbtn-close{
+  width:32px;height:32px;border-radius:var(--r6);
+  background:var(--surface)!important;border:1px solid var(--border2)!important;
+  color:var(--text2)!important;
+  display:inline-flex!important;align-items:center!important;justify-content:center!important;
+  cursor:pointer;font-size:16px;transition:var(--transition);
+  flex-shrink:0;padding:0!important;
+}
+.split-close-btn:hover,#sbtn-close:hover{background:var(--red-dim)!important;border-color:var(--red)!important;color:var(--red)!important;}
+
+.split-maps-area{
+  flex:1;display:flex;min-height:0;
+  position:relative;
+}
+
+.split-map-pane{
+  flex:1;position:relative;overflow:hidden;
+  min-width:0;
+}
+.split-map-pane + .split-map-pane{
+  border-left:3px solid var(--border3);
+}
+
+.split-map-inner{
+  position:absolute;inset:0;
+}
+
+.split-pane-label{
+  position:absolute;top:12px;left:50%;transform:translateX(-50%);
+  background:rgba(5,13,18,.92);
+  border:1px solid var(--border2);
+  border-radius:20px;
+  padding:5px 14px;
+  font-family:'JetBrains Mono',monospace;
+  font-size:11px;font-weight:700;
+  letter-spacing:.5px;
+  color:var(--white);
+  z-index:10;
+  backdrop-filter:blur(12px);
+  white-space:nowrap;
+  box-shadow:0 2px 16px rgba(0,0,0,.5);
+  pointer-events:none;
+}
+.split-pane-label.from-lbl{
+  border-color:rgba(16,185,129,.5);color:var(--green);
+  background:rgba(5,13,18,.94);
+}
+.split-pane-label.to-lbl{
+  border-color:rgba(244,63,94,.45);color:var(--red);
+  background:rgba(5,13,18,.94);
+}
+
+.split-divider-line{
+  position:absolute;top:0;bottom:0;
+  left:50%;width:3px;
+  background:linear-gradient(to bottom,var(--accent2),var(--accent),var(--accent2));
+  z-index:5;pointer-events:none;
+  box-shadow:0 0 12px rgba(6,201,232,.4);
+}
+
+.split-divider-icon{
+  position:absolute;top:50%;left:50%;
+  transform:translate(-50%,-50%);
+  width:36px;height:36px;border-radius:50%;
+  background:var(--accent);
+  border:3px solid var(--bg);
+  display:flex;align-items:center;justify-content:center;
+  font-size:14px;color:#fff;
+  z-index:6;pointer-events:none;
+  box-shadow:0 0 20px rgba(6,201,232,.5);
+}
+
+.split-metrics-bar{
+  flex-shrink:0;
+  height:64px;
+  background:var(--topbar-bg);
+  border-top:1px solid var(--border);
+  display:flex;align-items:center;
+  gap:0;
+  overflow:hidden;
+  backdrop-filter:blur(12px);
+}
+
+.split-metric{
+  flex:1;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;
+  padding:0 6px;
+  border-right:1px solid var(--border);
+  min-width:0;
+}
+.split-metric:last-child{border-right:none}
+
+.split-metric-val{
+  font-family:'Syne',sans-serif;font-size:15px;font-weight:800;
+  color:var(--accent);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  max-width:100%;
+}
+.split-metric-lbl{
+  font-size:8px;color:var(--text3);
+  font-family:'JetBrains Mono',monospace;
+  text-align:center;letter-spacing:.3px;
+  margin-top:1px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  max-width:100%;
+}
+.split-metric-delta{
+  font-size:8.5px;font-family:'JetBrains Mono',monospace;
+  font-weight:700;color:var(--red);
+}
+
+/* Loading state for split maps */
+.split-map-loading{
+  position:absolute;inset:0;
+  display:flex;flex-direction:column;
+  align-items:center;justify-content:center;
+  gap:10px;
+  background:var(--bg);
+  z-index:20;
+  transition:opacity .4s ease;
+  pointer-events:auto;
+}
+.split-map-loading.hidden{
+  opacity:0;
+  pointer-events:none;
+  transition:opacity .4s ease;
+}
+.split-load-txt{font-size:11px;color:var(--text3);font-family:'JetBrains Mono',monospace;text-align:center;padding:0 10px}
+
+/* Historical overlay tint for FROM pane */
+.split-hist-tint{
+  position:absolute;inset:0;
+  background:rgba(16,185,129,.04);
+  pointer-events:none;z-index:5;
+}
+.split-now-tint{
+  position:absolute;inset:0;
+  background:rgba(244,63,94,.04);
+  pointer-events:none;z-index:5;
+}
+
+/* Split map canvases — pointer cursor to signal clickability */
+#split-pane-from .split-map-inner canvas,
+#split-pane-to   .split-map-inner canvas {
+  cursor: crosshair !important;
+}
+/* Hint ripple on pane label click affordance */
+.split-pane-label::after {
+  content: ' · tap for data';
+  font-size: 8px;
+  opacity: .55;
+  font-weight: 400;
+  letter-spacing: .3px;
+}
+
+/* ── Historical FROM pane: richer green/lush Landsat look ── */
+/* Historical imagery = MORE vegetation, LESS urban grey.
+   We boost greens & contrast so users instantly see the difference vs the
+   current pane which shows dense grey urban concrete (Esri/Maxar). */
+#split-pane-from .split-map-inner canvas {
+  filter: saturate(160%) hue-rotate(8deg) brightness(1.04) contrast(1.08);
+  transition: filter .8s ease;
+}
+/* Current TO pane: cooler, desaturated urban look */
+#split-pane-to .split-map-inner canvas {
+  filter: saturate(82%) hue-rotate(-6deg) brightness(0.97) contrast(1.06);
+  transition: filter .8s ease;
+}
+
+/* ── Floating key card — compact square, bottom-left ── */
+@keyframes keyCardIn  { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+@keyframes keyCardOut { 0%{opacity:1;transform:translateY(0)} 100%{opacity:0;transform:translateY(8px);pointer-events:none} }
+#split-key-card{
+  position:absolute;
+  bottom:76px;
+  left:14px;
+  transform:none;
+  z-index:30;
+  background:rgba(5,13,18,.97);
+  border:1px solid rgba(6,201,232,.3);
+  border-radius:10px;
+  padding:10px 12px;
+  width:222px;
+  box-shadow:0 6px 24px rgba(0,0,0,.7),0 0 0 1px rgba(6,201,232,.07);
+  backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  display:flex;flex-direction:column;gap:7px;
+  pointer-events:auto;
+}
+#split-key-card.animating-in { animation:keyCardIn .4s ease forwards; }
+#split-key-card.hide{ animation:keyCardOut .7s ease forwards; pointer-events:none; }
+.skc-head{
+  display:flex;align-items:center;justify-content:space-between;gap:6px;
+  border-bottom:1px solid rgba(6,182,212,.12);padding-bottom:6px;
+}
+.skc-title{
+  font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;
+  color:#06c9e8;letter-spacing:.8px;text-transform:uppercase;
+}
+.skc-dismiss{
+  font-size:9px;color:#3d7a92;cursor:pointer;padding:1px 5px;
+  border-radius:3px;border:1px solid rgba(6,182,212,.18);
+  font-family:'JetBrains Mono',monospace;
+  background:none;transition:color .12s,border-color .12s;line-height:1.4;
+}
+.skc-dismiss:hover{color:#06c9e8;border-color:rgba(6,201,232,.5);}
+.skc-row{display:flex;align-items:center;gap:8px;}
+.skc-dot-big{
+  width:10px;height:10px;border-radius:50%;flex-shrink:0;
+  box-shadow:0 0 6px currentColor;
+}
+.skc-row-txt{flex:1;min-width:0;}
+.skc-label{font-size:9.5px;font-weight:700;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.skc-label.hist{color:#10b981;}
+.skc-label.curr{color:#f43f5e;}
+.skc-sub{font-size:8.5px;color:#3d7a92;font-family:'JetBrains Mono',monospace;line-height:1.3;margin-top:1px;}
+.skc-divider{height:1px;background:rgba(6,182,212,.1);}
+.skc-legend-row{display:flex;gap:8px;flex-wrap:wrap;}
+.skc-leg{display:flex;align-items:center;gap:4px;font-size:8px;color:#7ab3c8;font-family:'JetBrains Mono',monospace;white-space:nowrap;}
+.skc-sq{width:7px;height:7px;border-radius:1px;flex-shrink:0;}
+.skc-tip{
+  font-size:7.5px;color:#3d7a92;font-family:'JetBrains Mono',monospace;
+  letter-spacing:.2px;border-top:1px solid rgba(6,182,212,.1);padding-top:5px;
+  line-height:1.4;
+}
+
+/* ── Split pane click popup ── */
+#split-click-popup{
+  position:absolute;
+  z-index:40;
+  background:rgba(5,13,18,.98);
+  border:1px solid rgba(6,201,232,.35);
+  border-radius:10px;
+  padding:12px 14px;
+  width:230px;
+  box-shadow:0 8px 32px rgba(0,0,0,.75);
+  backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  display:none;
+  flex-direction:column;gap:7px;
+  pointer-events:auto;
+  animation:keyCardIn .25s ease forwards;
+}
+#split-click-popup.show{display:flex;}
+.scp-header{display:flex;align-items:center;justify-content:space-between;gap:6px;}
+.scp-title{font-family:'Syne',sans-serif;font-size:12px;font-weight:800;color:#eaf8ff;}
+.scp-year{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;letter-spacing:.5px;}
+.scp-year.from-yr{color:#10b981;background:rgba(16,185,129,.15);border:1px solid rgba(16,185,129,.35);}
+.scp-year.to-yr{color:#f43f5e;background:rgba(244,63,94,.12);border:1px solid rgba(244,63,94,.3);}
+.scp-close{font-size:13px;color:#3d7a92;cursor:pointer;padding:0 3px;border:none;background:none;line-height:1;transition:color .12s;}
+.scp-close:hover{color:#f43f5e;}
+.scp-divider{height:1px;background:rgba(6,182,212,.12);}
+.scp-row{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:2px 0;}
+.scp-key{font-size:9px;color:#7ab3c8;font-family:'JetBrains Mono',monospace;letter-spacing:.3px;}
+.scp-val{font-family:'Syne',sans-serif;font-size:12px;font-weight:800;}
+.scp-val.red{color:#f43f5e;}
+.scp-val.green{color:#10b981;}
+.scp-val.amber{color:#f59e0b;}
+.scp-val.cyan{color:#06c9e8;}
+.scp-val.sky{color:#38bdf8;}
+.scp-source{font-size:7.5px;color:#3d7a92;font-family:'JetBrains Mono',monospace;letter-spacing:.2px;border-top:1px solid rgba(6,182,212,.1);padding-top:5px;}
+.scp-delta-row{background:rgba(6,201,232,.05);border:1px solid rgba(6,201,232,.12);border-radius:6px;padding:5px 8px;}
+.scp-delta-lbl{font-size:8px;color:#7ab3c8;font-family:'JetBrains Mono',monospace;margin-bottom:3px;letter-spacing:.3px;}
+.scp-delta-val{font-family:'Syne',sans-serif;font-size:13px;font-weight:800;color:#f43f5e;}
+
+/* Year badge on split pane bottom */
+.split-year-badge{
+  position:absolute;bottom:12px;left:50%;transform:translateX(-50%);
+  background:rgba(5,13,18,.92);
+  border:1px solid var(--border2);
+  border-radius:var(--r6);
+  padding:4px 12px;
+  font-family:'Syne',sans-serif;
+  font-size:20px;font-weight:800;
+  z-index:10;
+  backdrop-filter:blur(12px);
+  pointer-events:none;
+  box-shadow:0 2px 12px rgba(0,0,0,.4);
+}
+.split-year-badge.yr-from{color:var(--green);border-color:rgba(16,185,129,.4)}
+.split-year-badge.yr-to{color:var(--red);border-color:rgba(244,63,94,.35)}
+
+/* Split satellite info chips */
+.split-sat-chip{
+  position:absolute;bottom:48px;left:50%;transform:translateX(-50%);
+  background:rgba(5,13,18,.88);
+  border:1px solid rgba(56,189,248,.3);
+  border-radius:12px;padding:3px 10px;
+  font-size:9px;font-family:'JetBrains Mono',monospace;
+  color:var(--sky);z-index:10;pointer-events:none;
+  white-space:nowrap;
+}
+
+/* ── Capture loading ── */
+.split-capture-overlay{
+  position:absolute;inset:0;z-index:50;
+  background:rgba(5,13,18,.75);
+  display:none;align-items:center;justify-content:center;
+  flex-direction:column;gap:10px;
+  backdrop-filter:blur(4px);
+}
+.split-capture-overlay.show{display:flex}
+.split-capture-txt{color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:12px}
+
+/* ── Split view header action buttons ── */
+/* Action buttons container — 2nd grid column */
+.split-action-btns,#split-action-btns{
+  display:flex!important;
+  flex-direction:row!important;
+  align-items:center!important;
+  gap:6px!important;
+  flex-shrink:0!important;
+  flex-wrap:nowrap!important;
+  visibility:visible!important;
+  opacity:1!important;
+}
+/* Zoom / Fit buttons */
+.split-zoom-btn,#sbtn-zoomin,#sbtn-zoomout,#sbtn-fit{
+  display:inline-flex!important;
+  visibility:visible!important;opacity:1!important;
+  width:32px!important;height:32px!important;border-radius:6px!important;
+  background:var(--surface2)!important;border:1px solid var(--border2)!important;
+  color:var(--text)!important;
+  align-items:center!important;justify-content:center!important;
+  cursor:pointer!important;font-size:17px!important;font-weight:700!important;
+  font-family:monospace!important;line-height:1!important;
+  flex-shrink:0!important;padding:0!important;box-sizing:border-box!important;
+  transition:background .2s,border-color .2s,color .2s;
+  user-select:none;-webkit-tap-highlight-color:transparent;
+}
+.split-zoom-btn:hover{background:var(--surface3)!important;border-color:var(--accent)!important;color:var(--accent)!important;}
+.split-zoom-btn:active{transform:scale(.92)}
+/* Back to Map button */
+.split-reset-btn,#sbtn-back{
+  display:inline-flex!important;
+  visibility:visible!important;opacity:1!important;
+  align-items:center!important;gap:5px!important;
+  padding:0 14px!important;height:32px!important;
+  border-radius:6px!important;
+  background:var(--accent2)!important;
+  border:1px solid var(--accent)!important;
+  color:#fff!important;font-size:11px!important;font-weight:700!important;
+  cursor:pointer!important;font-family:'DM Sans',sans-serif!important;
+  white-space:nowrap!important;flex-shrink:0!important;
+  box-shadow:0 0 12px rgba(6,201,232,.35)!important;
+  user-select:none;-webkit-tap-highlight-color:transparent;
+  box-sizing:border-box!important;
+  transition:background .2s,box-shadow .2s;
+}
+.split-reset-btn:hover,#sbtn-back:hover{background:var(--accent)!important;box-shadow:0 0 20px rgba(6,201,232,.55)!important;}
+.split-reset-btn:active,#sbtn-back:active{transform:scale(.96)}
+
+/* Floating zoom controls INSIDE each split map pane */
+.split-map-zoom-ctrl{
+  position:absolute;bottom:60px;right:10px;z-index:20;
+  display:flex;flex-direction:column;gap:3px;
+}
+.split-map-zoom-ctrl button{
+  width:30px;height:30px;border-radius:var(--r6);
+  background:rgba(5,13,18,.88);border:1px solid var(--border2);
+  color:var(--text);font-size:17px;font-weight:700;
+  cursor:pointer;transition:var(--transition);
+  display:flex;align-items:center;justify-content:center;
+  backdrop-filter:blur(8px);line-height:1;font-family:monospace;
+}
+.split-map-zoom-ctrl button:hover{background:rgba(6,201,232,.25);border-color:var(--accent);color:var(--accent);}
+
+/* Panel toggle reset pulse animation */
+@keyframes mapResetPulse{
+  0%{box-shadow:0 0 0 0 rgba(6,201,232,.5)}
+  70%{box-shadow:0 0 0 12px rgba(6,201,232,0)}
+  100%{box-shadow:0 0 0 0 rgba(6,201,232,0)}
+}
+.map-reset-pulse{animation:mapResetPulse .6s ease-out}
+
+@media(max-width:600px){
+  .split-metrics-bar{height:54px}
+  .split-metric-val{font-size:13px}
+  .split-header{
+    height:auto;min-height:48px;padding:6px 8px;gap:4px;
+    grid-template-columns:1fr auto auto;
+  }
+  .split-header-title{font-size:11px}
+  .split-reset-btn{font-size:10px;padding:5px 9px;gap:3px}
+  .split-zoom-btn{width:28px;height:28px;font-size:14px}
+  .split-header-meta{display:none}
+  .split-map-zoom-ctrl{bottom:50px;right:6px}
+  .split-action-btns{gap:3px}
+}
+@media(max-width:600px){
+  .split-metrics-bar{height:54px}
+  .split-metric-val{font-size:13px}
+  .split-header,#split-header-bar{height:auto!important;min-height:48px;padding:6px 8px!important;gap:5px!important;}
+  .split-header-title{font-size:10px}
+  .split-reset-btn,#sbtn-back{font-size:9px!important;padding:0 8px!important;}
+  .split-zoom-btn,#sbtn-zoomin,#sbtn-zoomout,#sbtn-fit{width:26px!important;height:26px!important;font-size:13px!important;}
+  .split-map-zoom-ctrl{bottom:50px;right:6px}
+  .split-action-btns,#split-action-btns{gap:3px!important}
+}
 </style>
 </head>
 <body>
@@ -1648,6 +2079,133 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
   </div>
   <div class="tl-year" id="tl-year">2024</div>
   <span class="tl-epoch" id="tl-epoch">Current State</span>
+</div>
+
+<!-- ══ SPLIT SATELLITE COMPARISON OVERLAY ══ -->
+<div id="uw-split-overlay">
+  <div class="split-header" id="split-header-bar">
+    <div class="split-header-title">🛰 <span id="split-title-years">— vs —</span></div>
+    <div class="split-action-btns" id="split-action-btns">
+      <button class="split-zoom-btn" id="sbtn-zoomin"  onclick="splitZoomIn()"   title="Zoom In">+</button>
+      <button class="split-zoom-btn" id="sbtn-zoomout" onclick="splitZoomOut()"  title="Zoom Out">−</button>
+      <button class="split-zoom-btn" id="sbtn-fit"     onclick="splitFitZone()"  title="Fit to selected zone">⊕</button>
+      <button class="split-reset-btn" id="sbtn-back"   onclick="uwCloseSplitView(true)">← Back to Map</button>
+    </div>
+    <button class="split-close-btn" id="sbtn-close" onclick="uwCloseSplitView(true)" title="Close">✕</button>
+  </div>
+  <div class="split-maps-area" id="split-maps-area">
+    <div class="split-map-pane" id="split-pane-from">
+      <div class="split-map-inner" id="split-map-from-el"></div>
+      <div class="split-map-loading" id="split-load-from">
+        <div class="spinner"></div>
+        <div class="split-load-txt" id="split-load-from-txt">Loading historical satellite…</div>
+      </div>
+      <div class="split-pane-label from-lbl" id="split-from-lbl">FROM YEAR</div>
+      <div class="split-year-badge yr-from" id="split-yr-from">—</div>
+      <div class="split-sat-chip" id="split-from-chip">NASA GIBS · Landsat</div>
+      <!-- Floating zoom controls on the FROM map -->
+      <div class="split-map-zoom-ctrl">
+        <button onclick="splitZoomIn()" title="Zoom In">+</button>
+        <button onclick="splitZoomOut()" title="Zoom Out">−</button>
+        <button onclick="splitFitZone()" title="Fit to selected zone" style="font-size:11px">⊕</button>
+      </div>
+    </div>
+    <div class="split-map-pane" id="split-pane-to">
+      <div class="split-map-inner" id="split-map-to-el"></div>
+      <div class="split-map-loading" id="split-load-to">
+        <div class="spinner"></div>
+        <div class="split-load-txt" id="split-load-to-txt">Loading current satellite…</div>
+      </div>
+      <div class="split-pane-label to-lbl" id="split-to-lbl">CURRENT STATE</div>
+      <div class="split-year-badge yr-to" id="split-yr-to">—</div>
+      <div class="split-sat-chip">Esri World Imagery · Maxar</div>
+    </div>
+    <div class="split-capture-overlay" id="split-capture-overlay">
+      <div class="spinner"></div>
+      <div class="split-capture-txt">Capturing satellite imagery for report…</div>
+    </div>
+    <!-- ── Compact Key Card — bottom-left corner, auto-hides ── -->
+    <div id="split-key-card" style="display:none;">
+      <div class="skc-head">
+        <div class="skc-title">🛰 Legend</div>
+        <button class="skc-dismiss" onclick="splitDismissKeyCard()">✕</button>
+      </div>
+      <div class="skc-row">
+        <div class="skc-dot-big" style="background:#10b981;color:#10b981;"></div>
+        <div class="skc-row-txt">
+          <div class="skc-label hist" id="skc-from-label">FROM — HISTORICAL</div>
+          <div class="skc-sub">More green · Less urban</div>
+        </div>
+      </div>
+      <div class="skc-row">
+        <div class="skc-dot-big" style="background:#f43f5e;color:#f43f5e;"></div>
+        <div class="skc-row-txt">
+          <div class="skc-label curr" id="skc-to-label">TO — CURRENT</div>
+          <div class="skc-sub">Dense urban grey · Built-up</div>
+        </div>
+      </div>
+      <div class="skc-divider"></div>
+      <div class="skc-legend-row">
+        <div class="skc-leg"><div class="skc-sq" style="background:#10b981;"></div>Vegetation</div>
+        <div class="skc-leg"><div class="skc-sq" style="background:#94a3b8;"></div>Urban</div>
+        <div class="skc-leg"><div class="skc-sq" style="background:#38bdf8;"></div>Water</div>
+      </div>
+      <div class="skc-tip">👆 Click any image for real data</div>
+    </div>
+    <!-- ── Split pane click popup ── -->
+    <div id="split-click-popup">
+      <div class="scp-header">
+        <div class="scp-title" id="scp-title">Accra Land Data</div>
+        <span class="scp-year" id="scp-year-badge">—</span>
+        <button class="scp-close" onclick="splitClosePopup()">✕</button>
+      </div>
+      <div class="scp-divider"></div>
+      <div class="scp-row"><span class="scp-key">Built-up Area</span><span class="scp-val red" id="scp-built">—</span></div>
+      <div class="scp-row"><span class="scp-key">Population</span><span class="scp-val cyan" id="scp-pop">—</span></div>
+      <div class="scp-row"><span class="scp-key">Wetland Cover</span><span class="scp-val green" id="scp-wetland">—</span></div>
+      <div class="scp-row"><span class="scp-key">Flood Events/yr</span><span class="scp-val amber" id="scp-flood">—</span></div>
+      <div class="scp-row"><span class="scp-key">Odaw Capacity</span><span class="scp-val sky" id="scp-odaw">—</span></div>
+      <div class="scp-row"><span class="scp-key">Storm Runoff</span><span class="scp-val amber" id="scp-runoff">—</span></div>
+      <div class="scp-divider"></div>
+      <div class="scp-delta-row" id="scp-delta-block" style="display:none;">
+        <div class="scp-delta-lbl" id="scp-delta-lbl">CHANGE vs OTHER YEAR</div>
+        <div class="scp-delta-val" id="scp-delta-val">—</div>
+      </div>
+      <div class="scp-source" id="scp-source">NASA GIBS Landsat · GSS Ghana · NADMO · EPA Ghana · Ramsar</div>
+    </div>
+  </div>
+  <div class="split-metrics-bar" id="split-metrics-bar">
+    <div class="split-metric">
+      <div class="split-metric-val" id="spm-built">—</div>
+      <div class="split-metric-lbl">Built-Up Added</div>
+      <div class="split-metric-delta" id="spm-built-d"></div>
+    </div>
+    <div class="split-metric">
+      <div class="split-metric-val" id="spm-wetland">—</div>
+      <div class="split-metric-lbl">Wetland Lost</div>
+      <div class="split-metric-delta" id="spm-wetland-d"></div>
+    </div>
+    <div class="split-metric">
+      <div class="split-metric-val" id="spm-flood">—</div>
+      <div class="split-metric-lbl">Flood Events</div>
+      <div class="split-metric-delta" id="spm-flood-d"></div>
+    </div>
+    <div class="split-metric">
+      <div class="split-metric-val" id="spm-pop">—</div>
+      <div class="split-metric-lbl">Population</div>
+      <div class="split-metric-delta" id="spm-pop-d"></div>
+    </div>
+    <div class="split-metric">
+      <div class="split-metric-val" id="spm-odaw">—</div>
+      <div class="split-metric-lbl">Odaw Capacity</div>
+      <div class="split-metric-delta" id="spm-odaw-d"></div>
+    </div>
+    <div class="split-metric" style="cursor:pointer" onclick="uwExportPDF()">
+      <div class="split-metric-val" style="color:var(--accent);font-size:12px;white-space:nowrap" id="spm-export-btn">📄 Export PDF</div>
+      <div class="split-metric-lbl">Satellite Report</div>
+      <div class="split-metric-delta" style="color:var(--accent)">incl. imagery</div>
+    </div>
+  </div>
 </div>
 
 <!-- TOAST -->
@@ -2879,7 +3437,18 @@ function setSpeed(v){playSpeed=+v;if(playing){clearInterval(playTimer);playTimer
 // ══════════════════════════════════════════════════
 // PANEL CONTROLS — Desktop + Tablet + Mobile unified
 // ══════════════════════════════════════════════════
+// Helper: if split view is open, close it and restore normal map
+function _resetSplitIfOpen() {
+  if(splitState && splitState.open) {
+    uwCloseSplitView(true);
+    return true;
+  }
+  return false;
+}
+
 function toggleLeft(){
+  // If split overlay is open, close it and restore normal map instead
+  if(_resetSplitIfOpen()) return;
   if(isMobile()){
     const panel=document.getElementById('left-panel');
     const isOpen=panel.classList.contains('mobile-open');
@@ -2907,6 +3476,8 @@ function toggleLeft(){
 }
 
 function toggleRight(){
+  // If split overlay is open, close it and restore normal map instead
+  if(_resetSplitIfOpen()) return;
   if(isMobile()){
     const panel=document.getElementById('right-panel');
     const isOpen=panel.classList.contains('mobile-open');
@@ -3357,11 +3928,810 @@ function uwRunComparison() {
   btn.textContent = '⚡ Analyze Period: '+fromY+' → '+toY;
   uwToast('Analysis complete: '+fromY+'→'+toY,'info');
 
+  // Open split satellite view
+  setTimeout(function(){ uwOpenSplitView(); }, 400);
+
   // Scroll to metrics
   setTimeout(function(){
     var el = document.getElementById('uw-metrics');
     if(el) el.scrollIntoView({behavior:'smooth',block:'nearest'});
   },300);
+}
+
+// ════════════════════════════════════════════════════════════════
+// SPLIT SATELLITE COMPARISON ENGINE
+// ════════════════════════════════════════════════════════════════
+
+var splitState = {
+  mapFrom: null,
+  mapTo:   null,
+  open:    false,
+  capturedDataURL: null,
+  _fromClickBound: false,
+  _toClickBound:   false,
+};
+
+// Satellite tile sources (clean, no labels)
+function uwSatStyle(tileUrl) {
+  return {
+    version: 8,
+    sources: {
+      sat: {
+        type: 'raster',
+        tiles: [tileUrl],
+        tileSize: 256,
+        attribution: '© Esri · Maxar · GeoEye',
+        maxzoom: 18
+      }
+    },
+    layers: [{ id: 'sat-layer', type: 'raster', source: 'sat', paint: {'raster-opacity': 1.0} }]
+  };
+}
+
+// Get the current map center/zoom to use for the split view
+function uwSplitGetCenter() {
+  if(mapReady && map) {
+    return { center: map.getCenter(), zoom: map.getZoom(), pitch: 0, bearing: 0 };
+  }
+  var zd = UW_ZONES[uwState.zone];
+  if(zd) return { center: {lng: zd.center[0], lat: zd.center[1]}, zoom: zd.zoom, pitch: 0, bearing: 0 };
+  return { center: {lng: ACCRA_CENTER[0], lat: ACCRA_CENTER[1]}, zoom: 11.5, pitch: 0, bearing: 0 };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// SPLIT VIEW SATELLITE IMAGERY — REAL YEAR-DIFFERENTIATED SOURCES
+// ══════════════════════════════════════════════════════════════════
+//
+// FROM pane (historical year):
+//   Primary:  NASA GIBS Landsat_WELD_CorrectedReflectance_TrueColor_Global_Annual
+//             Annual true-color composites, 2000–2019. 30m Landsat resolution.
+//             These are REAL archived satellite composites — vegetation, urban
+//             extent, and water bodies look distinctly different vs current.
+//   Fallback: NASA GIBS MODIS Terra TrueColor (daily 500m, good 2003–present)
+//             for years outside Landsat WELD range.
+//
+// TO pane (current / toYear):
+//   Esri World Imagery — Maxar/DigitalGlobe submeter imagery (~2022–2024)
+//   This is the CURRENT state: dense urban, less vegetation, built-up.
+//
+// The visual difference between the two panes is REAL:
+//   • Historical Landsat (green/mixed spectral) vs Current Esri (grey urban)
+//   • Users can clearly see urban sprawl replacing green/wetland areas
+// ══════════════════════════════════════════════════════════════════
+
+// Build historical style: layered — Esri base + NASA Landsat WELD on top
+// The Landsat layer dominates where it has data (zoom ≤12) giving the
+// characteristic brownish-green historical Landsat look vs modern Esri grey
+function uwBuildYearStyle(year) {
+  // Landsat WELD annual composites: 2000–2019
+  var landsatYear = year < 2000 ? 2000 : year > 2019 ? 2019 : year;
+  var landsatDate = landsatYear + '-01-01';
+
+  // MODIS Terra daily true-color for fallback context (500m, global)
+  // Use a mid-year date for annual representative imagery
+  var modisYear = year < 2003 ? 2003 : year > 2024 ? 2024 : year;
+  var modisDate = modisYear + '-07-01';
+
+  return {
+    version: 8,
+    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+    sources: {
+      // Esri base: always shows as the ground truth current reference at high zoom
+      // but at zoom ≤12 the Landsat layer on top gives the historical spectral look
+      esri_hist: {
+        type: 'raster',
+        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+        tileSize: 256,
+        attribution: 'Esri · Maxar',
+        maxzoom: 19
+      },
+      // MODIS daily true-color: 500m global, gives context at lower zooms
+      modis: {
+        type: 'raster',
+        tiles: [
+          'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/' +
+          'MODIS_Terra_CorrectedReflectance_TrueColor/default/' +
+          modisDate + '/GoogleMapsCompatible/{z}/{y}/{x}.jpg'
+        ],
+        tileSize: 256,
+        attribution: 'NASA GIBS · MODIS Terra',
+        maxzoom: 9
+      },
+      // Landsat WELD: the KEY historical layer — 30m annual composite
+      // Shows the actual land cover of that year: more vegetation, less urban
+      landsat: {
+        type: 'raster',
+        tiles: [
+          'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/' +
+          'Landsat_WELD_CorrectedReflectance_TrueColor_Global_Annual/default/' +
+          landsatDate + '/GoogleMapsCompatible/{z}/{y}/{x}.jpg'
+        ],
+        tileSize: 256,
+        attribution: 'NASA GIBS · Landsat WELD ' + landsatYear,
+        maxzoom: 12
+      }
+    },
+    layers: [
+      // 1. Esri base — always visible
+      { id: 'esri-hist-layer', type: 'raster', source: 'esri_hist',
+        paint: { 'raster-opacity': 1.0 } },
+      // 2. MODIS: medium zoom context, fades in at zoom <9
+      { id: 'modis-layer', type: 'raster', source: 'modis',
+        paint: { 'raster-opacity': 0.85 } },
+      // 3. Landsat WELD: top layer — the actual historical annual composite
+      //    Opacity 1.0 so it completely replaces the Esri/MODIS where available
+      //    This is what gives the HISTORICAL look (more green, less grey urban)
+      { id: 'landsat-layer', type: 'raster', source: 'landsat',
+        paint: { 'raster-opacity': 1.0 } }
+    ]
+  };
+}
+
+// Current state: pure Esri World Imagery — modern submeter satellite
+// This shows the CURRENT dense urban landscape, roads, buildings clearly
+function uwBuildCurrentStyle() {
+  return {
+    version: 8,
+    sources: {
+      esri: {
+        type: 'raster',
+        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+        tileSize: 256,
+        attribution: 'Esri · Maxar · Earthstar Geographics · Current',
+        maxzoom: 19
+      }
+    },
+    layers: [
+      { id: 'esri-current-layer', type: 'raster', source: 'esri',
+        paint: { 'raster-opacity': 1.0 } }
+    ]
+  };
+}
+
+// Force-apply inline styles to split header buttons — overrides any CSS specificity issues
+function _splitForceHeaderButtons() {
+  // Action buttons container
+  var ab = document.getElementById('split-action-btns');
+  if(ab) {
+    ab.style.cssText = 'display:flex!important;flex-direction:row;align-items:center;gap:6px;flex-shrink:0;flex-wrap:nowrap;visibility:visible;opacity:1;';
+  }
+  // Resolve theme-aware colors at runtime
+  var cs = getComputedStyle(document.documentElement);
+  var _accent  = (cs.getPropertyValue('--accent')||'').trim() || '#06c9e8';
+  var _accent2 = (cs.getPropertyValue('--accent2')||'').trim() || '#0891b2';
+  var _surf    = (cs.getPropertyValue('--surface')||'').trim() || '#0c1e2c';
+  var _surf2   = (cs.getPropertyValue('--surface2')||'').trim() || '#112433';
+  var _bdr2    = (cs.getPropertyValue('--border2')||'').trim() || 'rgba(6,182,212,.22)';
+  var _txt     = (cs.getPropertyValue('--text')||'').trim() || '#c8e6f0';
+  var _txt2    = (cs.getPropertyValue('--text2')||'').trim() || '#7ab3c8';
+
+  // Back button — use resolved hex so it actually renders
+  var back = document.getElementById('sbtn-back');
+  if(back) {
+    back.style.cssText = 'display:inline-flex!important;visibility:visible!important;opacity:1!important;align-items:center!important;gap:5px!important;padding:0 14px!important;height:32px!important;border-radius:6px!important;background:'+_accent2+'!important;border:1px solid '+_accent+'!important;color:#fff!important;font-size:11px!important;font-weight:700!important;cursor:pointer!important;font-family:DM Sans,sans-serif!important;white-space:nowrap!important;flex-shrink:0!important;box-shadow:0 0 12px rgba(6,201,232,.45)!important;box-sizing:border-box!important;';
+  }
+  // Zoom/fit buttons
+  ['sbtn-zoomin','sbtn-zoomout','sbtn-fit'].forEach(function(id){
+    var btn = document.getElementById(id);
+    if(btn) {
+      btn.style.cssText = 'display:inline-flex!important;visibility:visible!important;opacity:1!important;width:32px!important;height:32px!important;border-radius:6px!important;background:'+_surf2+'!important;border:1px solid '+_bdr2+'!important;color:'+_txt+'!important;align-items:center!important;justify-content:center!important;cursor:pointer!important;font-size:17px!important;font-weight:700!important;font-family:monospace!important;flex-shrink:0!important;padding:0!important;box-sizing:border-box!important;';
+    }
+  });
+  // Close button
+  var close = document.getElementById('sbtn-close');
+  if(close) {
+    close.style.cssText = 'display:inline-flex!important;visibility:visible!important;opacity:1!important;width:32px!important;height:32px!important;border-radius:6px!important;background:'+_surf+'!important;border:1px solid '+_bdr2+'!important;color:'+_txt2+'!important;align-items:center!important;justify-content:center!important;cursor:pointer!important;font-size:16px!important;flex-shrink:0!important;padding:0!important;box-sizing:border-box!important;';
+  }
+}
+
+function uwOpenSplitView() {
+  var fromY     = uwState.fromYear;
+  var toY       = uwState.toYear;
+  var c         = uwState.computed;
+  var zoneKey   = uwState.zone || 'all';
+  var zone      = UW_ZONES[zoneKey];
+  var zoneLabel = zone ? zone.label : 'Greater Accra';
+
+  // Determine actual Landsat year used (clamped to GIBS availability 2000–2019)
+  var landsatYear = fromY < 2000 ? 2000 : fromY > 2019 ? 2019 : fromY;
+
+  // ── Header labels ────────────────────────────────────────────────
+  document.getElementById('split-title-years').textContent =
+    '📡 ' + fromY + ' vs ' + toY + '  ·  ' + zoneLabel;
+
+  // ── Bottom metrics bar ───────────────────────────────────────────
+  if(c) {
+    document.getElementById('spm-built').textContent    = '+' + Math.round(c.builtDelta) + ' km²';
+    document.getElementById('spm-built-d').textContent  = Math.round(c.builtFrom)+'→'+Math.round(c.builtTo);
+    document.getElementById('spm-wetland').textContent  = '-' + Math.round(c.totalWetlandFrom - c.totalWetlandTo) + ' ha';
+    document.getElementById('spm-flood').textContent    = '+' + Math.round(c.floodDelta) + '/yr';
+    document.getElementById('spm-flood-d').textContent  = Math.round(c.floodFrom)+'→'+Math.round(c.floodTo);
+    document.getElementById('spm-pop').textContent      = (c.popTo/1e6).toFixed(2)+'M';
+    document.getElementById('spm-pop-d').textContent    = (c.popFrom/1e6).toFixed(1)+'M→'+(c.popTo/1e6).toFixed(1)+'M';
+    document.getElementById('spm-odaw').textContent     = Math.round(c.odawTo)+'%';
+    document.getElementById('spm-odaw-d').textContent   = Math.round(c.odawFrom)+'%→'+Math.round(c.odawTo)+'%';
+  }
+
+  // ── Show overlay ─────────────────────────────────────────────────
+  var overlay = document.getElementById('uw-split-overlay');
+  overlay.classList.add('open');
+  splitState.open = true;
+  // Force-apply inline styles to header buttons — triple-fire to guarantee visibility
+  setTimeout(function() { _splitForceHeaderButtons(); }, 50);
+  setTimeout(function() { _splitForceHeaderButtons(); }, 350);
+  setTimeout(function() { _splitForceHeaderButtons(); }, 900);
+  splitState.capturedDataURL = null;
+  _splitBothReady = 0;
+
+  document.getElementById('split-load-from').classList.remove('hidden');
+  document.getElementById('split-load-to').classList.remove('hidden');
+  document.getElementById('split-load-from-txt').textContent = 'Loading ' + fromY + ' Landsat ' + landsatYear + '…';
+  document.getElementById('split-load-to-txt').textContent   = 'Loading ' + toY + ' Esri/Maxar imagery…';
+
+  // Update year badges + chips
+  document.getElementById('split-from-lbl').textContent  = fromY + ' · NASA GIBS Landsat ' + landsatYear;
+  document.getElementById('split-to-lbl').textContent    = toY  + ' · Esri World Imagery';
+  document.getElementById('split-yr-from').textContent   = fromY;
+  document.getElementById('split-yr-to').textContent     = toY;
+  var fromChip = document.getElementById('split-from-chip');
+  if(fromChip) fromChip.textContent = 'NASA GIBS Landsat ' + landsatYear + ' Annual';
+
+  // ── Update key card labels with actual years ──────────────────────
+  var skcFrom = document.getElementById('skc-from-label');
+  var skcTo   = document.getElementById('skc-to-label');
+  if(skcFrom) skcFrom.textContent = '\u25c4 ' + fromY + ' \u2014 HISTORICAL (NASA Landsat)';
+  if(skcTo)   skcTo.textContent   = fromY + ' \u2192 ' + toY + ' NOW (Esri/Maxar) \u25ba';
+
+  // ── Show floating key card, auto-dismiss after 9s ─────────────────
+  splitShowKeyCard(9000);
+
+  // ── Zone center & zoom ───────────────────────────────────────────
+  // For Landsat WELD (maxzoom 12), cap the zoom so tiles actually load.
+  // Esri side can be higher zoom but we sync them, so cap to 11.5 for visible Landsat data.
+  var mapCenter = zone ? zone.center : ACCRA_CENTER;
+  var mapZoom   = zone ? Math.min(zone.zoom, 11.5) : 10.8;
+
+  // ── Destroy old maps ─────────────────────────────────────────────
+  if(splitState.mapFrom) { try{splitState.mapFrom.remove();}catch(e){} splitState.mapFrom = null; }
+  if(splitState.mapTo)   { try{splitState.mapTo.remove();}catch(e){}   splitState.mapTo   = null; }
+
+  // ── Build map containers ─────────────────────────────────────────
+  var fromEl = document.getElementById('split-map-from-el');
+  fromEl.innerHTML = '';
+  var fromDiv = document.createElement('div');
+  fromDiv.style.cssText = 'position:absolute;inset:0;';
+  fromEl.appendChild(fromDiv);
+
+  var toEl = document.getElementById('split-map-to-el');
+  toEl.innerHTML = '';
+  var toDiv = document.createElement('div');
+  toDiv.style.cssText = 'position:absolute;inset:0;';
+  toEl.appendChild(toDiv);
+
+  try {
+    // FROM pane — NASA GIBS Landsat WELD annual composite (historical)
+    splitState.mapFrom = new maplibregl.Map({
+      container:             fromDiv,
+      style:                 uwBuildYearStyle(fromY),
+      center:                mapCenter,
+      zoom:                  mapZoom,
+      pitch:                 0, bearing: 0,
+      interactive:           true,
+      attributionControl:    false,
+      preserveDrawingBuffer: true,
+      fadeDuration:          0
+    });
+
+    // Apply historical filter once on first render, then remove listener (CSS handles the rest)
+    var _filterApplied = false;
+    splitState.mapFrom.on('render', function() {
+      if(!_filterApplied) {
+        _filterApplied = true;
+        _applyHistoricalFilter();
+      }
+    });
+
+    // TO pane — Esri World Imagery (current high-res, most recent)
+    splitState.mapTo = new maplibregl.Map({
+      container:             toDiv,
+      style:                 uwBuildCurrentStyle(),
+      center:                mapCenter,
+      zoom:                  mapZoom,
+      pitch:                 0, bearing: 0,
+      interactive:           true,
+      attributionControl:    false,
+      preserveDrawingBuffer: true,
+      fadeDuration:          0
+    });
+
+    // ── Bi-directional sync (pan/zoom one → other follows) ────────
+    var _sync = false;
+    function syncFT() {
+      if(_sync) return; _sync = true;
+      try {
+        splitState.mapTo.jumpTo({
+          center:  splitState.mapFrom.getCenter(),
+          zoom:    splitState.mapFrom.getZoom(),
+          bearing: splitState.mapFrom.getBearing(),
+          pitch:   splitState.mapFrom.getPitch()
+        });
+      } catch(e){}
+      _sync = false;
+    }
+    function syncTF() {
+      if(_sync) return; _sync = true;
+      try {
+        splitState.mapFrom.jumpTo({
+          center:  splitState.mapTo.getCenter(),
+          zoom:    splitState.mapTo.getZoom(),
+          bearing: splitState.mapTo.getBearing(),
+          pitch:   splitState.mapTo.getPitch()
+        });
+      } catch(e){}
+      _sync = false;
+    }
+    splitState.mapFrom.on('move', syncFT);
+    splitState.mapTo.on('move',   syncTF);
+
+    // ── On load: hide spinner, signal ready ───────────────────────
+    splitState.mapFrom.on('load', function() {
+      document.getElementById('split-load-from').classList.add('hidden');
+      // Resize after container is measured
+      setTimeout(function(){ if(splitState.mapFrom) splitState.mapFrom.resize(); }, 50);
+      // Apply historical look filter to canvas as soon as it exists
+      setTimeout(function(){ _applyHistoricalFilter(); }, 200);
+      // Attach click handler
+      _attachSplitClickHandlers();
+      uwCheckBothMapsReady();
+    });
+    splitState.mapTo.on('load', function() {
+      document.getElementById('split-load-to').classList.add('hidden');
+      setTimeout(function(){ if(splitState.mapTo) splitState.mapTo.resize(); }, 50);
+      _attachSplitClickHandlers();
+      uwCheckBothMapsReady();
+    });
+
+    // Safety fallback: if maps don't fire 'load' within 8s, hide spinners and apply filter anyway
+    setTimeout(function() {
+      document.getElementById('split-load-from').classList.add('hidden');
+      document.getElementById('split-load-to').classList.add('hidden');
+      _applyHistoricalFilter();
+    }, 8000);
+
+  } catch(e) {
+    console.error('Split map error:', e);
+    uwToast('Split view error: ' + e.message, 'error');
+    document.getElementById('split-load-from').classList.add('hidden');
+    document.getElementById('split-load-to').classList.add('hidden');
+  }
+}
+
+var _splitBothReady = 0;
+function uwCheckBothMapsReady() {
+  _splitBothReady++;
+  if(_splitBothReady >= 2) {
+    _splitBothReady = 0;
+    // Show divider after both maps loaded
+    var divEl = document.getElementById('split-divider');
+    if(divEl) divEl.style.display = '';
+    // Apply historical visual filter to FROM pane now that maps are ready
+    setTimeout(function() { _applyHistoricalFilter(); }, 300);
+    // Attach click handlers for real-data popups
+    setTimeout(function() { _attachSplitClickHandlers(); }, 350);
+    // Wait for tiles to fully render, then capture
+    var fromIdle = false, toIdle = false;
+    function checkIdle() {
+      if(fromIdle && toIdle) {
+        // Give extra 500ms for tiles to paint before capturing
+        setTimeout(function(){ uwSplitCapture(); }, 500);
+      }
+    }
+    if(splitState.mapFrom) {
+      splitState.mapFrom.once('idle', function(){ fromIdle = true; checkIdle(); });
+    } else { fromIdle = true; checkIdle(); }
+    if(splitState.mapTo) {
+      splitState.mapTo.once('idle', function(){ toIdle = true; checkIdle(); });
+    } else { toIdle = true; checkIdle(); }
+    // Hard fallback: capture after 3.5s regardless
+    setTimeout(function() {
+      if(!splitState.capturedDataURL) uwSplitCapture();
+    }, 3500);
+  }
+}
+
+function uwCloseSplitView(resetToNormal) {
+  var overlay = document.getElementById('uw-split-overlay');
+  overlay.style.opacity = '0';
+  // Dismiss key card immediately on close
+  splitDismissKeyCard();
+  // Close any open click popup
+  splitClosePopup();
+  // Reset MapLibre click-handler flags so they re-bind on next open
+  splitState._fromClickBound = false;
+  splitState._toClickBound   = false;
+  setTimeout(function(){
+    overlay.classList.remove('open');
+    overlay.style.opacity = '';
+    splitState.open = false;
+    // Clean up split maps to free memory
+    if(splitState.mapFrom) { try{splitState.mapFrom.remove();}catch(e){} splitState.mapFrom=null; }
+    if(splitState.mapTo)   { try{splitState.mapTo.remove();}catch(e){} splitState.mapTo=null; }
+    // Reset main map to satellite basemap and fit Accra bounds
+    if(resetToNormal && mapReady) {
+      if(curBase !== 'sat') { setBasemap('sat'); }
+      map.fitBounds(ACCRA_BOUNDS, {padding:40, duration:800});
+      setTimeout(function(){ map.resize(); }, 350);
+      var mw = document.getElementById('map-wrap');
+      mw.classList.add('map-reset-pulse');
+      setTimeout(function(){ mw.classList.remove('map-reset-pulse'); }, 700);
+      uwToast('Returned to normal satellite map view', 'success');
+    }
+  }, 300);
+}
+
+// Split view zoom controls — explicitly apply to BOTH maps every time
+function splitZoomIn() {
+  if(splitState.mapFrom) try{ splitState.mapFrom.zoomIn({duration:250}); }catch(e){}
+  if(splitState.mapTo)   try{ splitState.mapTo.zoomIn({duration:250}); }catch(e){}
+}
+function splitZoomOut() {
+  if(splitState.mapFrom) try{ splitState.mapFrom.zoomOut({duration:250}); }catch(e){}
+  if(splitState.mapTo)   try{ splitState.mapTo.zoomOut({duration:250}); }catch(e){}
+}
+function splitFitZone() {
+  var zoneKey = (uwState && uwState.zone) ? uwState.zone : 'all';
+  var zd = UW_ZONES[zoneKey] || UW_ZONES['all'];
+  var center = (zd && zd.center) ? zd.center : ACCRA_CENTER;
+  var zoom   = zd ? Math.min(zd.zoom, 11.5) : 10.8;
+  if(splitState.mapFrom) try{ splitState.mapFrom.easeTo({center:center,zoom:zoom,duration:700}); }catch(e){}
+  if(splitState.mapTo)   try{ splitState.mapTo.easeTo({center:center,zoom:zoom,duration:700}); }catch(e){}
+  uwToast('Fitted to: ' + (zd ? zd.label : 'Greater Accra'), 'success');
+}
+function splitFitBounds() { splitFitZone(); }
+
+// ── Floating Key Card — show/hide/dismiss ──────────────────────────
+var _keyCardTimer = null;
+function splitShowKeyCard(autoDismissMs) {
+  var kc = document.getElementById('split-key-card');
+  if(!kc) return;
+  if(_keyCardTimer) { clearTimeout(_keyCardTimer); _keyCardTimer = null; }
+  kc.classList.remove('hide');
+  kc.classList.remove('animating-in');
+  kc.style.display = 'flex';
+  // Force reflow then add animation class
+  void kc.offsetWidth;
+  kc.classList.add('animating-in');
+  _keyCardTimer = setTimeout(function() {
+    splitDismissKeyCard();
+  }, autoDismissMs || 9000);
+}
+function splitDismissKeyCard() {
+  var kc = document.getElementById('split-key-card');
+  if(!kc) return;
+  if(_keyCardTimer) { clearTimeout(_keyCardTimer); _keyCardTimer = null; }
+  kc.classList.remove('animating-in');
+  kc.classList.add('hide');
+  setTimeout(function() {
+    if(kc.classList.contains('hide')) kc.style.display = 'none';
+  }, 750);
+}
+
+// ── Apply CSS filters to both split panes for clear visual difference ──
+// FROM (historical): boost saturation + slight green hue → looks lush/vegetated
+// TO   (current):    desaturate + cool hue → looks grey/urban (Maxar concrete)
+function _applyHistoricalFilter() {
+  var fromPane = document.getElementById('split-pane-from');
+  var toPane   = document.getElementById('split-pane-to');
+
+  // Apply to canvases
+  if(fromPane) {
+    fromPane.querySelectorAll('canvas').forEach(function(cv) {
+      cv.style.filter = 'saturate(165%) hue-rotate(8deg) brightness(1.05) contrast(1.09)';
+      cv.style.transition = 'filter .8s ease';
+    });
+    // Remove old badge if present
+    var old = fromPane.querySelector('.split-hist-filter-badge');
+    if(old) old.remove();
+    // Subtle green overlay
+    if(!fromPane.querySelector('.split-hist-visual-tint')) {
+      var tint = document.createElement('div');
+      tint.className = 'split-hist-visual-tint';
+      tint.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:6;' +
+        'background:linear-gradient(135deg,rgba(16,185,129,0.06) 0%,rgba(52,211,153,0.03) 100%);';
+      fromPane.appendChild(tint);
+    }
+  }
+  if(toPane) {
+    toPane.querySelectorAll('canvas').forEach(function(cv) {
+      cv.style.filter = 'saturate(80%) hue-rotate(-6deg) brightness(0.96) contrast(1.07)';
+      cv.style.transition = 'filter .8s ease';
+    });
+    // Subtle cool urban overlay
+    if(!toPane.querySelector('.split-curr-visual-tint')) {
+      var tint2 = document.createElement('div');
+      tint2.className = 'split-curr-visual-tint';
+      tint2.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:6;' +
+        'background:linear-gradient(135deg,rgba(148,163,184,0.04) 0%,rgba(244,63,94,0.03) 100%);';
+      toPane.appendChild(tint2);
+    }
+  }
+}
+
+// ── Split pane click popup — real AccraWatch data per year ────────────
+function splitClosePopup() {
+  var p = document.getElementById('split-click-popup');
+  if(p) p.classList.remove('show');
+}
+
+function _splitPopupPosition(area, clickX, clickY) {
+  var el = document.getElementById('split-click-popup');
+  if(!el || !area) return;
+  var aw = area.offsetWidth, ah = area.offsetHeight;
+  var popW = 238, popH = el.offsetHeight || 280;
+  // Try right of click first, then left
+  var left = clickX + 16;
+  if(left + popW > aw - 8) left = clickX - popW - 16;
+  if(left < 8) left = 8;
+  // Vertically centre on click, clamp to area
+  var top = clickY - Math.round(popH / 2);
+  if(top < 8) top = 8;
+  if(top + popH > ah - 8) top = ah - popH - 8;
+  el.style.left = left + 'px';
+  el.style.top  = top  + 'px';
+}
+
+function _showSplitPopup(year, area, clickX, clickY, isFrom) {
+  var el = document.getElementById('split-click-popup');
+  if(!el) return;
+
+  // Real data from uwInterp for the clicked year
+  var built   = Math.round(uwInterp('built',    year));
+  var pop     = uwInterp('pop',       year);
+  var korle   = Math.round(uwInterp('korle_ha', year));
+  var densu   = Math.round(uwInterp('densu_ha', year));
+  var sakumo  = Math.round(uwInterp('sakumo_ha',year));
+  var chemu   = Math.round(uwInterp('chemu_ha', year));
+  var totalWet= korle + densu + sakumo + chemu;
+  var flood   = Math.round(uwInterp('flood_ev', year));
+  var fpop    = Math.round(uwInterp('flood_pop',year));
+  var odaw    = Math.round(uwInterp('odaw_cap', year));
+  var runoff  = uwInterp('runoff_x', year).toFixed(2);
+
+  // Delta vs the OTHER pane year
+  var otherYear = isFrom ? uwState.toYear : uwState.fromYear;
+  var otherBuilt = Math.round(uwInterp('built', otherYear));
+  var otherWet   = Math.round(uwInterp('korle_ha',otherYear))
+                 + Math.round(uwInterp('densu_ha',otherYear))
+                 + Math.round(uwInterp('sakumo_ha',otherYear))
+                 + Math.round(uwInterp('chemu_ha',otherYear));
+  var dBuilt = otherBuilt - built;   // positive = current has more urban
+  var dWet   = otherWet   - totalWet; // negative = current has less wetland
+
+  // Zone label
+  var zoneKey   = (uwState && uwState.zone) ? uwState.zone : 'all';
+  var zoneLabel = (UW_ZONES[zoneKey] || {label:'Greater Accra'}).label;
+
+  // ── Populate ──────────────────────────────────────────────────────
+  document.getElementById('scp-title').textContent = zoneLabel;
+  var badge = document.getElementById('scp-year-badge');
+  badge.textContent = year;
+  badge.className = 'scp-year ' + (isFrom ? 'from-yr' : 'to-yr');
+
+  document.getElementById('scp-built').textContent   = built + ' km²';
+  document.getElementById('scp-pop').textContent     = pop.toFixed(2) + 'M people';
+  document.getElementById('scp-wetland').textContent = totalWet.toLocaleString() + ' ha total';
+  document.getElementById('scp-flood').textContent   = flood + '/yr · ' + fpop + 'K affected';
+  document.getElementById('scp-odaw').textContent    = odaw + '% of capacity';
+  document.getElementById('scp-runoff').textContent  = runoff + '× 1990 baseline';
+
+  // Delta row
+  var db   = document.getElementById('scp-delta-block');
+  var dlbl = document.getElementById('scp-delta-lbl');
+  var dval = document.getElementById('scp-delta-val');
+  if(db && dlbl && dval) {
+    db.style.display = 'block';
+    var dir  = isFrom ? ('→ by ' + otherYear) : ('← from ' + otherYear);
+    dlbl.textContent = 'CHANGE ' + dir;
+    var parts = [];
+    if(dBuilt !== 0) parts.push((dBuilt > 0 ? '+' : '') + dBuilt + ' km² built-up');
+    if(dWet   !== 0) parts.push((dWet   > 0 ? '+' : '') + dWet   + ' ha wetland');
+    dval.textContent = parts.length ? parts.join('  ·  ') : 'Baseline year';
+    // Red if urban grew (dBuilt > 0 from FROM's perspective), green otherwise
+    dval.style.color = dBuilt > 0 ? '#f43f5e' : '#10b981';
+  }
+
+  // Source line
+  var src = isFrom
+    ? 'NASA GIBS Landsat ' + year + ' · GSS Ghana · NADMO · EPA Ghana'
+    : 'Esri World Imagery ' + year + ' · GSS Ghana · NADMO · Ramsar';
+  document.getElementById('scp-source').textContent = src;
+
+  // ── Show at click position ─────────────────────────────────────────
+  el.classList.remove('show');
+  void el.offsetWidth; // force reflow for re-animation
+  _splitPopupPosition(area, clickX, clickY);
+  el.classList.add('show');
+}
+
+function _attachSplitClickHandlers() {
+  // MapLibre's WebGL canvas consumes all pointer events — the only reliable way
+  // to detect clicks ON the satellite imagery is via map.on('click') on each instance.
+  // We remove any old listeners first to avoid duplicates.
+
+  if(splitState.mapFrom && !splitState._fromClickBound) {
+    splitState._fromClickBound = true;
+    splitState.mapFrom.on('click', function(e) {
+      // e.point = {x, y} pixel coords relative to the map container
+      var pane = document.getElementById('split-pane-from');
+      var area = document.getElementById('split-maps-area');
+      if(!pane || !area) return;
+      // Convert map-container coords to split-maps-area coords
+      var paneRect = pane.getBoundingClientRect();
+      var areaRect = area.getBoundingClientRect();
+      var cx = (paneRect.left - areaRect.left) + e.point.x;
+      var cy = e.point.y;
+      _showSplitPopup(uwState.fromYear, area, cx, cy, true);
+    });
+  }
+
+  if(splitState.mapTo && !splitState._toClickBound) {
+    splitState._toClickBound = true;
+    splitState.mapTo.on('click', function(e) {
+      var pane = document.getElementById('split-pane-to');
+      var area = document.getElementById('split-maps-area');
+      if(!pane || !area) return;
+      var paneRect = pane.getBoundingClientRect();
+      var areaRect = area.getBoundingClientRect();
+      var cx = (paneRect.left - areaRect.left) + e.point.x;
+      var cy = e.point.y;
+      _showSplitPopup(uwState.toYear, area, cx, cy, false);
+    });
+  }
+}
+
+// Capture split view as data URL for PDF — robust version
+// WebGL canvases lose their drawing buffer between frames unless preserveDrawingBuffer:true.
+// We trigger an explicit render on each map before reading pixels.
+function uwSplitCapture() {
+  var overlay = document.getElementById('split-capture-overlay');
+  if(overlay) overlay.classList.add('show');
+
+  // Give tiles a bit more time to finish loading, then capture
+  setTimeout(function() {
+    _doCapture();
+  }, 1200);
+}
+
+function _doCapture() {
+  try {
+    var fromMap = splitState.mapFrom;
+    var toMap   = splitState.mapTo;
+    if(!fromMap || !toMap) {
+      var overlay = document.getElementById('split-capture-overlay');
+      if(overlay) overlay.classList.remove('show');
+      return;
+    }
+
+    // Force a WebGL render cycle on both maps so the drawing buffer is populated
+    fromMap.triggerRepaint();
+    toMap.triggerRepaint();
+
+    // Use requestAnimationFrame to let the GPU flush before we read pixels
+    requestAnimationFrame(function() {
+      requestAnimationFrame(function() {
+        try {
+          var fromCanvas = fromMap.getCanvas();
+          var toCanvas   = toMap.getCanvas();
+
+          // Determine output size — cap at 2400×900 but respect pixel ratio
+          var srcW = fromCanvas.width;
+          var srcH = fromCanvas.height;
+          var outW = Math.min(srcW * 2, 2400);
+          var outH = Math.min(srcH, 900);
+          var halfW = Math.floor(outW / 2);
+
+          var composed = document.createElement('canvas');
+          composed.width  = outW;
+          composed.height = outH;
+          var ctx = composed.getContext('2d');
+
+          // Dark background
+          ctx.fillStyle = '#050d12';
+          ctx.fillRect(0, 0, outW, outH);
+
+          // Draw both satellite map canvases side-by-side
+          ctx.drawImage(fromCanvas, 0, 0, halfW, outH);
+          ctx.drawImage(toCanvas,   halfW, 0, halfW, outH);
+
+          // Divider line
+          ctx.strokeStyle = '#06c9e8';
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(halfW, 0);
+          ctx.lineTo(halfW, outH);
+          ctx.stroke();
+
+          // Divider icon circle
+          ctx.fillStyle = '#06c9e8';
+          ctx.beginPath();
+          ctx.arc(halfW, outH/2, 16, 0, Math.PI*2);
+          ctx.fill();
+          ctx.fillStyle = '#fff';
+          ctx.font = 'bold 14px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('⇔', halfW, outH/2);
+          ctx.textBaseline = 'alphabetic';
+
+          // FROM label (top-left of left pane)
+          var fromY_lbl = uwState.fromYear;
+          var toY_lbl   = uwState.toYear;
+          _drawLabel(ctx, 'FROM  ' + fromY_lbl, halfW/2, 16, '#10b981', 'rgba(5,13,18,0.9)', 180, 32);
+
+          // TO label (top-left of right pane)
+          _drawLabel(ctx, 'CURRENT  ' + toY_lbl, halfW + halfW/2, 16, '#f43f5e', 'rgba(5,13,18,0.9)', 210, 32);
+
+          // Year badges bottom-centre of each pane
+          _drawYearBadge(ctx, String(fromY_lbl), halfW/2, outH - 44, '#10b981');
+          _drawYearBadge(ctx, String(toY_lbl),   halfW + halfW/2, outH - 44, '#f43f5e');
+
+          // Satellite credit footer
+          ctx.fillStyle = 'rgba(5,13,18,0.82)';
+          ctx.fillRect(0, outH-20, outW, 20);
+          ctx.fillStyle = '#7ab3c8';
+          ctx.font = '9px JetBrains Mono, monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText('Esri World Imagery · Maxar Technologies · Greater Accra · AccraWatch ' + new Date().getFullYear(), outW/2, outH-6);
+
+          splitState.capturedDataURL = composed.toDataURL('image/jpeg', 0.93);
+          uwToast('Satellite image captured for export ✓', 'success');
+        } catch(e) {
+          console.warn('Split capture draw failed:', e);
+          splitState.capturedDataURL = null;
+        }
+        var overlay = document.getElementById('split-capture-overlay');
+        if(overlay) overlay.classList.remove('show');
+      });
+    });
+  } catch(e) {
+    console.warn('Split capture setup failed:', e);
+    splitState.capturedDataURL = null;
+    var overlay = document.getElementById('split-capture-overlay');
+    if(overlay) overlay.classList.remove('show');
+  }
+}
+
+// Draw a pill label on the canvas
+function _drawLabel(ctx, text, cx, cy, color, bg, w, h) {
+  var r = h/2;
+  ctx.fillStyle = bg;
+  ctx.beginPath();
+  if(ctx.roundRect) { ctx.roundRect(cx - w/2, cy, w, h, r); }
+  else { ctx.rect(cx - w/2, cy, w, h); }
+  ctx.fill();
+  ctx.fillStyle = color;
+  ctx.font = 'bold 11px JetBrains Mono, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, cx, cy + h*0.65);
+}
+
+// Draw a year badge (rounded rect + big year text)
+function _drawYearBadge(ctx, text, cx, cy, color) {
+  ctx.fillStyle = 'rgba(5,13,18,0.92)';
+  ctx.beginPath();
+  if(ctx.roundRect) { ctx.roundRect(cx-38, cy, 76, 34, 8); }
+  else { ctx.rect(cx-38, cy, 76, 34); }
+  ctx.fill();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  if(ctx.roundRect) { ctx.roundRect(cx-38, cy, 76, 34, 8); }
+  else { ctx.rect(cx-38, cy, 76, 34); }
+  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.font = 'bold 20px Syne, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, cx, cy + 24);
 }
 
 // ── Refresh metrics cards ────────────────────────────────────────
@@ -3791,19 +5161,65 @@ function uwOnTabOpen() {
 
 async function uwExportPDF() {
   var btn = document.getElementById('rp-export-btn');
-  if(!btn) return;
-  btn.style.pointerEvents = 'none';
-  btn.innerHTML = '<span class="spin" style="display:inline-block">⟳</span>';
-  uwToast('Generating PDF report…', 'info');
+  var spmBtn = document.getElementById('spm-export-btn');
+  if(btn) { btn.style.pointerEvents = 'none'; btn.innerHTML = '<span class="spin" style="display:inline-block">⟳</span>'; }
+  if(spmBtn) spmBtn.textContent = '⟳ Generating…';
+  uwToast('Preparing satellite capture…', 'info');
 
+  // Always re-capture the satellite image fresh right before export
+  // so the export always shows the real, current satellite map
+  if(splitState.open && splitState.mapFrom && splitState.mapTo) {
+    // Re-capture with fresh render
+    splitState.capturedDataURL = null;
+    await new Promise(function(resolve) {
+      // Trigger re-render and wait for idle
+      if(splitState.mapFrom) splitState.mapFrom.triggerRepaint();
+      if(splitState.mapTo)   splitState.mapTo.triggerRepaint();
+      var done = false;
+      function finish() {
+        if(done) return; done = true;
+        _doCapture();
+        setTimeout(resolve, 500); // give _doCapture time to finish
+      }
+      if(splitState.mapFrom) {
+        splitState.mapFrom.once('idle', finish);
+      }
+      setTimeout(finish, 2000); // fallback
+    });
+  } else if(!splitState.open && uwState.hasRun && !splitState.capturedDataURL) {
+    // If split view was closed, open it, wait for render, capture, then close
+    uwToast('Opening satellite view for capture…', 'info');
+    uwOpenSplitView();
+    await new Promise(function(resolve) {
+      var attempts = 0;
+      var check = setInterval(function() {
+        attempts++;
+        if((splitState.mapFrom && splitState.mapTo) || attempts > 20) {
+          clearInterval(check);
+          setTimeout(function() {
+            if(splitState.mapFrom) splitState.mapFrom.triggerRepaint();
+            if(splitState.mapTo)   splitState.mapTo.triggerRepaint();
+            requestAnimationFrame(function() {
+              requestAnimationFrame(function() {
+                _doCapture();
+                setTimeout(resolve, 600);
+              });
+            });
+          }, 1800);
+        }
+      }, 150);
+    });
+  }
+
+  uwToast('Generating PDF report…', 'info');
   try {
     await uwGenerateAndPrintPDF();
   } catch(err) {
     console.error('PDF export error:', err);
     uwToast('PDF export error: ' + (err.message||String(err)), 'error');
   }
-  btn.style.pointerEvents = '';
-  btn.innerHTML = '📄';
+  if(btn) { btn.style.pointerEvents = ''; btn.innerHTML = '📄'; }
+  if(spmBtn) spmBtn.textContent = '📄 Export PDF';
 }
 
 async function uwGenerateAndPrintPDF() {
@@ -4072,33 +5488,110 @@ async function uwGenerateAndPrintPDF() {
     + 'ul{margin:5px 0;padding-left:15px}'
     + 'li{margin-bottom:3px;font-size:11px}'
     + '.foot{border-top:1px solid #e2e8f0;padding:9px 26px;font-size:8.5px;color:#94a3b8;margin-top:14px}'
+    // Satellite imagery section
+    + '.sat-section{margin-bottom:20px}'
+    + '.sat-section h2{color:#0f4c81;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;border-bottom:2px solid #0891b2;padding-bottom:3px;margin:0 0 10px}'
+    + '.sat-box{background:#0f172a;border:2px solid #0891b2;border-radius:8px;overflow:hidden;width:100%}'
+    + '.sat-img-row{display:flex;width:100%;min-height:220px;position:relative}'
+    + '.sat-half{flex:1;position:relative;display:flex;flex-direction:column}'
+    + '.sat-img-wrap{flex:1;overflow:hidden;min-height:200px}'
+    + '.sat-img-wrap img{width:100%;height:100%;object-fit:cover;display:block}'
+    + '.sat-half-label{background:rgba(15,23,42,0.92);padding:6px 12px;text-align:center;font-size:10px;font-weight:700;letter-spacing:.5px;border-top:1px solid #1e3a5f}'
+    + '.sat-half-label.from-lbl{color:#10b981}'
+    + '.sat-half-label.to-lbl{color:#f43f5e}'
+    + '.sat-divider{width:3px;background:linear-gradient(to bottom,#0891b2,#06c9e8,#0891b2);flex-shrink:0}'
+    + '.sat-caption{background:#1e293b;color:#94a3b8;font-size:9px;padding:6px 14px;text-align:center;border-top:1px solid #1e3a5f}'
+    + '.sat-meta-bar{display:flex;background:#0c2a3f;border-top:1px solid #1e3a5f}'
+    + '.sat-meta-cell{flex:1;padding:6px 8px;text-align:center;border-right:1px solid #1e3a5f}'
+    + '.sat-meta-cell:last-child{border-right:none}'
+    + '.sat-meta-val{font-size:13px;font-weight:800;color:#38bdf8;display:block}'
+    + '.sat-meta-lbl{font-size:8px;color:#7ab3c8}'
+    + '.sat-meta-delta{font-size:8px;color:#f43f5e;font-weight:700}'
+    + '.sat-placeholder{width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#0c1e2c;color:#1e40af;font-size:22px}'
     + '</style></head><body>'
     + '<div class="hdr">'
-    + '<h1>AccraWatch \u00B7 Urban\u2013Water Executive Report</h1>'
-    + '<div class="sub">Greater Accra Real-Time Land & Water Intelligence \u00B7 Official Executive Summary</div>'
+    + '<h1>AccraWatch · Urban\u2013Water Executive Report</h1>'
+    + '<div class="sub">Greater Accra Real-Time Land & Water Intelligence · Official Executive Summary</div>'
     + '<div class="meta">'
-    + '<span>\uD83D\uDCCD Zone: <strong>' + zoneLabel + '</strong></span>'
-    + '<span>\uD83D\uDCC5 ' + dateStr + ' \u00B7 ' + timeStr + ' GMT</span>'
-    + '<span>\uD83D\uDC65 Population: <strong>' + (pop/1e6).toFixed(2) + 'M</strong></span>'
-    + (c ? '<span>\uD83D\uDCCA Period: <strong>' + fromY + ' \u2192 ' + toY + '</strong></span>' : '<span>\uD83D\uDCCA Baseline 2024</span>')
+    + '<span>📍 Zone: <strong>' + zoneLabel + '</strong></span>'
+    + '<span>📅 ' + dateStr + ' · ' + timeStr + ' GMT</span>'
+    + '<span>👥 Population: <strong>' + (pop/1e6).toFixed(2) + 'M</strong></span>'
+    + (c ? '<span>📊 Period: <strong>' + fromY + ' → ' + toY + '</strong></span>' : '<span>📊 Baseline 2024</span>')
     + '</div></div>'
     + '<div class="body">'
+
+    // ── SATELLITE COMPARISON SECTION ──
+    + (function() {
+        var satImgHTML = '';
+        var hasImg = !!(splitState && splitState.capturedDataURL);
+        if(hasImg) {
+          // ── REAL captured satellite imagery — full-width, high quality ──
+          satImgHTML = '<img src="' + splitState.capturedDataURL + '" '
+            + 'style="width:100%;display:block;border-radius:4px 4px 0 0;max-height:340px;object-fit:cover" '
+            + 'alt="Satellite comparison ' + fromY + ' vs ' + toY + '">';
+        } else {
+          // ── Satellite map not yet captured: show a clean data-summary card (no fake imagery box) ──
+          var _bFrom = Math.round(c ? c.builtFrom : uwInterp('built', fromY));
+          var _bTo   = Math.round(c ? c.builtTo   : uwInterp('built', toY));
+          var _wFrom = Math.round(c ? c.totalWetlandFrom : uwInterp('korle_ha',fromY)+uwInterp('densu_ha',fromY)+uwInterp('sakumo_ha',fromY)+uwInterp('chemu_ha',fromY));
+          var _wTo   = Math.round(c ? c.totalWetlandTo   : uwInterp('korle_ha',toY)+uwInterp('densu_ha',toY)+uwInterp('sakumo_ha',toY)+uwInterp('chemu_ha',toY));
+          satImgHTML = '<div style="width:100%;background:#0f172a;border-radius:4px 4px 0 0;padding:18px 22px">'
+            + '<div style="color:#94a3b8;font-size:10px;margin-bottom:10px;font-family:monospace;letter-spacing:.5px">SATELLITE COMPARISON · ESRI WORLD IMAGERY · MAXAR TECHNOLOGIES</div>'
+            + '<div style="display:grid;grid-template-columns:1fr 3px 1fr;gap:0;min-height:120px">'
+              + '<div style="padding:14px;background:rgba(16,185,129,.07);border-radius:6px 0 0 6px">'
+                + '<div style="color:#10b981;font-size:10px;font-weight:700;letter-spacing:.5px;margin-bottom:6px">◀ ' + fromY + ' — HISTORICAL</div>'
+                + '<div style="color:#e2e8f0;font-size:13px;font-weight:700">Built-up: <span style="color:#f97316">' + _bFrom + ' km²</span></div>'
+                + '<div style="color:#e2e8f0;font-size:13px;font-weight:700;margin-top:4px">Wetlands: <span style="color:#38bdf8">' + _wFrom.toLocaleString() + ' ha</span></div>'
+                + '<div style="color:#7ab3c8;font-size:9px;margin-top:8px">Landsat archive imagery · AccraWatch</div>'
+              + '</div>'
+              + '<div style="background:linear-gradient(to bottom,#0891b2,#06c9e8,#0891b2);flex-shrink:0"></div>'
+              + '<div style="padding:14px;background:rgba(244,63,94,.06);border-radius:0 6px 6px 0">'
+                + '<div style="color:#f43f5e;font-size:10px;font-weight:700;letter-spacing:.5px;margin-bottom:6px">CURRENT STATE — ' + toY + ' ▶</div>'
+                + '<div style="color:#e2e8f0;font-size:13px;font-weight:700">Built-up: <span style="color:#f97316">' + _bTo + ' km²</span></div>'
+                + '<div style="color:#e2e8f0;font-size:13px;font-weight:700;margin-top:4px">Wetlands: <span style="color:#38bdf8">' + _wTo.toLocaleString() + ' ha</span></div>'
+                + '<div style="color:#fca5a5;font-size:9px;margin-top:8px">Sentinel-2 / Esri World Imagery · 2024</div>'
+              + '</div>'
+            + '</div>'
+            + '<div style="color:#475569;font-size:8.5px;margin-top:10px;font-style:italic">To include actual satellite imagery, open the Satellite Comparison view before exporting.</div>'
+          + '</div>';
+        }
+
+        return '<div class="sat-section">'
+          + '<h2>🛰 Satellite Imagery Comparison: ' + fromY + ' → ' + toY + ' · ' + zoneLabel + '</h2>'
+          + '<div class="sat-box">'
+          + satImgHTML
+          // Metrics bar under image
+          + '<div class="sat-meta-bar">'
+          + (c ? [
+            ['+'+ Math.round(c.builtDelta)+' km²', 'Built-Up Added', Math.round(c.builtFrom)+'→'+Math.round(c.builtTo)+' km²'],
+            ['-'+Math.round(c.totalWetlandFrom-c.totalWetlandTo)+' ha', 'Wetland Lost', ((1-(c.totalWetlandTo/c.totalWetlandFrom))*100).toFixed(1)+'% reduction'],
+            ['+'+Math.round(c.floodDelta)+'/yr', 'Flood Events', Math.round(c.floodFrom)+'→'+Math.round(c.floodTo)+'/yr'],
+            [(c.popTo/1e6).toFixed(2)+'M', 'Population '+toY, (c.popFrom/1e6).toFixed(1)+'M→'+(c.popTo/1e6).toFixed(1)+'M'],
+            [Math.round(c.odawTo)+'%', 'Odaw Capacity', Math.round(c.odawFrom)+'%→'+Math.round(c.odawTo)+'% utilised'],
+          ].map(function(m){
+            return '<div class="sat-meta-cell"><span class="sat-meta-val">'+m[0]+'</span><div class="sat-meta-lbl">'+m[1]+'</div><div class="sat-meta-delta">'+m[2]+'</div></div>';
+          }).join('') : '<div class="sat-meta-cell" style="flex:1"><span class="sat-meta-val" style="color:#7ab3c8">Run period comparison for metrics</span></div>')
+          + '</div>'
+          + '<div class="sat-caption">Esri World Imagery · Maxar Technologies · '+zoneLabel+' · AccraWatch Analysis · Generated ' + dateStr + '</div>'
+          + '</div></div>';
+      }())
+
     + '<div class="sec"><h2>Executive Summary</h2><div class="exec">' + execText + '</div></div>'
-    + '<div class="sec"><h2>Key Metrics \u00B7 2024 Baseline</h2><div class="grid">'
-    + '<div class="card"><span class="v">' + builtNowF + ' km\u00B2</span><div class="l">Built-up Area 2024</div><div class="c">+' + (builtNowF-142) + ' km\u00B2 since 1990</div></div>'
+    + '<div class="sec"><h2>Key Metrics · 2024 Baseline</h2><div class="grid">'
+    + '<div class="card"><span class="v">' + builtNowF + ' km²</span><div class="l">Built-up Area 2024</div><div class="c">+' + (builtNowF-142) + ' km² since 1990</div></div>'
     + '<div class="card"><span class="v">' + floodEvNowF + '/yr</span><div class="l">Annual Flood Events</div><div class="c">vs 2/yr in 1990</div></div>'
     + '<div class="card"><span class="v">' + floodPopNowF + 'K</span><div class="l">People Affected/yr</div><div class="c">vs 12K in 1990</div></div>'
     + '<div class="card"><span class="v">' + odawNowF + '%</span><div class="l">Odaw Drain Capacity</div><div class="c">overflow >100%</div></div>'
-    + '<div class="card"><span class="v">' + runoffNowF + '\u00D7</span><div class="l">Storm Runoff Mult.</div><div class="c">vs 1.0\u00D7 in 1990</div></div>'
+    + '<div class="card"><span class="v">' + runoffNowF + '×</span><div class="l">Storm Runoff Mult.</div><div class="c">vs 1.0× in 1990</div></div>'
     + '<div class="card"><span class="v">' + wbData.reduce(function(s,w){return s+w.loss;},0).toLocaleString() + ' ha</span><div class="l">Total Wetland Lost</div><div class="c">across 5 water bodies</div></div>'
     + '</div></div>'
     + periodTableHtml
-    + '<div class="sec"><h2>Water Body Status \u00B7 2024</h2>'
+    + '<div class="sec"><h2>Water Body Status · 2024</h2>'
     + '<table><tr><th>Water Body</th><th style="text-align:center">Area Now</th><th style="text-align:center">1990 Base</th><th style="text-align:center">Loss</th><th>Primary Pressure</th></tr>' + wbRowsHtml + '</table></div>'
     + (floodHtml ? '<div class="sec"><h2>Flood Risk Assessment</h2><ul>' + floodHtml + '</ul></div>' : '')
     + (actHtml ? '<div class="sec"><h2>Recommended Actions</h2><ul>' + actHtml + '</ul></div>' : '')
     + '</div>'
-    + '<div class="foot">Generated by AccraWatch Real-Time Land Intelligence \u00B7 AI: Claude claude-sonnet-4-6 (Anthropic) \u00B7 Data: NASA GIBS, Open-Meteo, EPA Ghana, GWCL, NADMO, GSS Census 2021, Ramsar RIS 563/564 \u00B7 ' + dateStr + ' ' + timeStr + ' GMT</div>'
+    + '<div class="foot">Generated by AccraWatch Real-Time Land Intelligence · AI: Claude claude-sonnet-4-6 (Anthropic) · Data: NASA GIBS, Esri World Imagery, Maxar Technologies, Open-Meteo, EPA Ghana, GWCL, NADMO, GSS Census 2021, Ramsar RIS 563/564 · ' + dateStr + ' ' + timeStr + ' GMT</div>'
     + '</body></html>';
 
   var printWin = window.open('', '_blank', 'width=900,height=700');

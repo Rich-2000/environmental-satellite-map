@@ -1324,8 +1324,7 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
 }
 #split-slider-to {
   position:absolute;inset:0;
-  clip-path: inset(0 0 0 50%);
-  transition: clip-path 0s;
+  /* clip-path applied via JS directly on the WebGL canvas */
 }
 #split-slider-handle {
   position:absolute;top:0;bottom:0;
@@ -1379,6 +1378,10 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
   position:absolute;inset:0;
   width:100%;
   height:100%;
+  overflow:visible;
+}
+#split-slider-to-map canvas {
+  /* JS will set clip-path here directly */
 }
 #split-sentinel-status {
   position:absolute;bottom:12px;right:14px;z-index:12;
@@ -5177,8 +5180,9 @@ function uwSplitGetCenter() {
 var _sentinelToken = null;
 var _sentinelTokenExpiry = 0;
 
-// No backend available — resolve immediately with empty token.
+// No backend required — resolves immediately with empty token.
 // All imagery uses Esri Wayback / Google Maps tiles which need no auth.
+// When a real Sentinel token is available it can be set via _sentinelToken directly.
 function getSentinelToken() {
   return Promise.resolve(_sentinelToken || '');
 }
@@ -5337,53 +5341,13 @@ function getWaybackTileStyle(year, label) {
 }
 
 function uwBuildYearStyle(year) {
-  // For historical years: try Esri Wayback archive (has actual dated satellite imagery)
-  if(_waybackVintagesLoaded && ESRI_WAYBACK_VINTAGES.length) {
+  // For years >= 2014 where Wayback has good coverage, use Wayback for best fidelity.
+  // For years < 2014, use Copernicus Sentinel/Landsat WMS.
+  if(year >= 2014 && _waybackVintagesLoaded && ESRI_WAYBACK_VINTAGES.length) {
     var waybackStyle = getWaybackTileStyle(year, year);
     if(waybackStyle) return waybackStyle;
   }
-  // If Wayback not yet loaded or year not available, use Esri current World Imagery
-  // (still shows different tile layers than Google Maps — gives visual distinction)
-  var isHistorical = year < 2020;
-  if(isHistorical) {
-    // Esri World Imagery — best available for historical fallback
-    return {
-      version: 8,
-      glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
-      sources: {
-        esri_sat: {
-          type: 'raster',
-          tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-          tileSize: 256,
-          attribution: 'Esri World Imagery · ' + year,
-          maxzoom: 19
-        }
-      },
-      layers: [{ id: 'esri-sat-layer', type: 'raster', source: 'esri_sat',
-        paint: { 'raster-opacity': 1.0 } }]
-    };
-  }
-  // Current/recent: Google Maps hybrid (higher resolution for recent years)
-  return {
-    version: 8,
-    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
-    sources: {
-      gmaps_sat: {
-        type: 'raster',
-        tiles: [
-          'https://mt0.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-          'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-          'https://mt2.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-          'https://mt3.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'
-        ],
-        tileSize: 256,
-        attribution: '© Google Maps Hybrid · ' + year,
-        maxzoom: 21
-      }
-    },
-    layers: [{ id: 'gmaps-hybrid-layer', type: 'raster', source: 'gmaps_sat',
-      paint: { 'raster-opacity': 1.0 } }]
-  };
+  return uwBuildSentinelStyle(_sentinelToken || '', year);
 }
 
 function uwBuildCurrentStyle() {
@@ -5487,10 +5451,8 @@ function uwOpenSplitView() {
 
   var fromLbl = document.getElementById('split-slider-from-lbl');
   var toLbl   = document.getElementById('split-slider-to-lbl');
-  var fromSrc = (fromY >= 2014) ? 'Esri Wayback' : 'Esri Historical';
-  var toSrc   = (toY   >= 2020) ? 'Google Maps Hybrid' : 'Esri Wayback';
-  if(fromLbl) fromLbl.textContent = '◀ ' + fromY + ' · ' + fromSrc;
-  if(toLbl)   toLbl.textContent   = toY + ' · ' + toSrc + ' ▶';
+  if(fromLbl) fromLbl.textContent = fromY + ' · Copernicus Sentinel-2';
+  if(toLbl)   toLbl.textContent   = toY   + ' · Copernicus Sentinel-2';
 
   var skcFrom = document.getElementById('skc-from-label');
   var skcTo   = document.getElementById('skc-to-label');
@@ -5516,15 +5478,23 @@ function uwOpenSplitView() {
   var sentinelStatus = document.getElementById('split-sentinel-status');
   if(sentinelStatus) sentinelStatus.textContent = '🛰 Fetching imagery sources…';
 
-  // Preload Wayback vintages — no sentinel token needed (using Google Maps tiles)
-  _loadWaybackVintages().then(function() {
+  // Preload Wayback vintages in parallel with Sentinel token
+  Promise.all([
+    getSentinelToken(),
+    _loadWaybackVintages()
+  ]).then(function(results) {
+    var token = results[0];
+    var fromStyle = (token && ESRI_WAYBACK_VINTAGES.length && fromY >= 2014)
+      ? (getWaybackTileStyle(fromY, fromY) || uwBuildYearStyle(fromY))
+      : uwBuildYearStyle(fromY);
+    var toStyle = (token && ESRI_WAYBACK_VINTAGES.length && toY >= 2014)
+      ? (getWaybackTileStyle(toY, toY) || uwBuildYearStyle(toY))
+      : uwBuildYearStyle(toY);
+
     if(sentinelStatus) {
       var wb = ESRI_WAYBACK_VINTAGES.length;
-      sentinelStatus.textContent = (wb ? '📅 Esri Wayback · ' + wb + ' vintages · FROM=' + fromY + ' TO=' + toY : '🛰 Esri (historical) vs Google Maps (current)');
+      sentinelStatus.textContent = '🛰 ' + (wb ? 'Esri Wayback (' + wb + ' vintages) · ' : '') + 'Google Satellite';
     }
-
-    var fromStyle = uwBuildYearStyle(fromY);
-    var toStyle   = uwBuildYearStyle(toY);
 
     var commonOpts = {
       center: mapCenter, zoom: mapZoom,
@@ -5570,27 +5540,26 @@ function uwOpenSplitView() {
     splitState.mapFrom.on('move', syncFT);
     splitState.mapTo.on('move',   syncTF);
 
-    splitState.mapFrom.on('load', function() {
-      uwCheckBothMapsReady();
-      // Re-initialize slider once map canvases are rendered
-      setTimeout(function(){ _initSplitSlider(); }, 100);
-    });
-    splitState.mapTo.on('load', function() {
-      uwCheckBothMapsReady();
-    });
+    var _fromLoaded = false, _toLoaded = false;
+    function _onBothLoaded() {
+      if(!_fromLoaded || !_toLoaded) return;
+      _initSplitSlider();
+      setTimeout(function(){ _initSplitSlider(); }, 300);
+      setTimeout(function(){ addRiversToSplitMap(splitState.mapFrom, fromY); addRiversToSplitMap(splitState.mapTo, toY); }, 600);
+    }
+    splitState.mapFrom.on('load', function(){ _fromLoaded = true; _onBothLoaded(); uwCheckBothMapsReady(); });
+    splitState.mapTo.on('load',   function(){ _toLoaded   = true; _onBothLoaded(); uwCheckBothMapsReady(); });
 
-    setTimeout(function() { uwCheckBothMapsReady(); }, 8000);
+    // Fallback: force-proceed after 6s if load events are slow/missed
+    setTimeout(function(){ _fromLoaded = true; _toLoaded = true; _onBothLoaded(); _initSplitSlider(); }, 6000);
 
-    // Initialize slider immediately so it works while maps are loading
     _initSplitSlider();
-    // Re-init after a short delay to ensure DOM is fully rendered
-    setTimeout(function(){ _initSplitSlider(); }, 500);
-    setTimeout(function(){ _initSplitSlider(); }, 1500);
     _attachSplitClickHandlers();
 
   }).catch(function(err) {
-    uwToast('Imagery load error: ' + (err && err.message ? err.message : String(err)), 'error');
-    if(sentinelStatus) sentinelStatus.textContent = '⚠ Imagery load error — check network';
+    // Should never reach here with the no-op getSentinelToken, but handle gracefully
+    uwToast('Split view error: ' + (err && err.message ? err.message : err), 'error');
+    if(sentinelStatus) sentinelStatus.textContent = '⚠ Error loading imagery';
   });
 }
 
@@ -5607,25 +5576,28 @@ var _splitSlider = {
 
 function _initSplitSlider() {
   var wrap   = document.getElementById('split-slider-wrap');
-  var toPane = document.getElementById('split-slider-to');
   var handle = document.getElementById('split-slider-handle');
-  if(!wrap || !toPane || !handle) return;
+  if(!wrap || !handle) return;
 
-  // Remove old listeners if re-initializing
+  // Remove old listeners
   if(_splitSlider._mousemove)  { document.removeEventListener('mousemove', _splitSlider._mousemove); _splitSlider._mousemove = null; }
   if(_splitSlider._mouseup)    { document.removeEventListener('mouseup',   _splitSlider._mouseup);   _splitSlider._mouseup   = null; }
   if(_splitSlider._touchmove)  { document.removeEventListener('touchmove', _splitSlider._touchmove); _splitSlider._touchmove = null; }
   if(_splitSlider._touchend)   { document.removeEventListener('touchend',  _splitSlider._touchend);  _splitSlider._touchend  = null; }
 
-  // Restore last pct or default to 50
   var pct = _splitSlider.pct || 50;
 
   function applyPct(p) {
     pct = Math.max(2, Math.min(98, p));
     _splitSlider.pct = pct;
-    // FROM pane fills full area (bottom layer)
-    // TO pane clips from the LEFT — shows only the right portion past the handle
-    toPane.style.clipPath = 'inset(0 0 0 ' + pct + '%)';
+    // KEY FIX: clip the WebGL canvas directly — CSS clip on the container div
+    // does NOT propagate to its WebGL canvas child in all browsers.
+    var toMapEl = document.getElementById('split-slider-to-map');
+    if(toMapEl) {
+      toMapEl.style.clipPath = 'inset(0 0 0 ' + pct + '%)';
+      var canvas = toMapEl.querySelector('canvas');
+      if(canvas) canvas.style.clipPath = 'inset(0 0 0 ' + pct + '%)';
+    }
     handle.style.left = pct + '%';
     handle.style.transform = 'translateX(-50%)';
   }
@@ -5634,16 +5606,11 @@ function _initSplitSlider() {
   function onMove(clientX) {
     var rect = wrap.getBoundingClientRect();
     if(!rect.width) return;
-    var p = ((clientX - rect.left) / rect.width) * 100;
-    applyPct(p);
-    // Trigger map resize to keep canvases aligned
-    if(splitState && splitState.mapFrom) { try{ splitState.mapFrom.resize(); }catch(e){} }
-    if(splitState && splitState.mapTo)   { try{ splitState.mapTo.resize();   }catch(e){} }
+    applyPct(((clientX - rect.left) / rect.width) * 100);
   }
 
   _splitSlider.dragging = false;
 
-  // Mouse events on handle
   handle.addEventListener('mousedown', function(e) {
     _splitSlider.dragging = true;
     e.preventDefault();
@@ -5651,13 +5618,12 @@ function _initSplitSlider() {
   });
 
   _splitSlider._mousemove = function(e) {
-    if(_splitSlider.dragging) { onMove(e.clientX); }
+    if(_splitSlider.dragging) onMove(e.clientX);
   };
   _splitSlider._mouseup = function() { _splitSlider.dragging = false; };
   document.addEventListener('mousemove', _splitSlider._mousemove);
   document.addEventListener('mouseup',   _splitSlider._mouseup);
 
-  // Touch events on handle — non-passive so we can preventDefault
   handle.addEventListener('touchstart', function(e) {
     _splitSlider.dragging = true;
     e.preventDefault();
@@ -5666,22 +5632,27 @@ function _initSplitSlider() {
 
   _splitSlider._touchmove = function(e) {
     if(_splitSlider.dragging && e.touches && e.touches[0]) {
-      e.preventDefault(); // prevent page scroll while dragging
+      e.preventDefault();
       onMove(e.touches[0].clientX);
     }
   };
   _splitSlider._touchend = function() { _splitSlider.dragging = false; };
-  // Must be non-passive to allow preventDefault
   document.addEventListener('touchmove', _splitSlider._touchmove, {passive: false});
   document.addEventListener('touchend',  _splitSlider._touchend);
 
-  // Also allow clicking/tapping anywhere on the wrap to jump the slider
+  // Click anywhere on wrap to jump slider
   wrap.addEventListener('click', function(e) {
-    // Don't trigger on handle itself or buttons/popups
     if(e.target === handle || handle.contains(e.target)) return;
     if(e.target.closest && (e.target.closest('#split-click-popup') || e.target.closest('#split-key-card'))) return;
     onMove(e.clientX);
   });
+
+  // Re-apply clip whenever MapLibre redraws or resizes (canvas can be recreated)
+  function _reapply() { applyPct(_splitSlider.pct); }
+  if(splitState.mapTo) {
+    splitState.mapTo.on('render', _reapply);
+    splitState.mapTo.on('resize', function(){ setTimeout(_reapply, 50); });
+  }
 
   _splitSlider.initialized = true;
 }
@@ -5799,8 +5770,8 @@ function uwCloseSplitView(resetToNormal) {
     var toMapEl   = document.getElementById('split-slider-to-map');
     if(fromMapEl) fromMapEl.innerHTML = '';
     if(toMapEl)   toMapEl.innerHTML   = '';
-    var toPane = document.getElementById('split-slider-to');
-    if(toPane) toPane.style.clipPath = 'inset(0 0 0 50%)';
+    var toMapEl2 = document.getElementById('split-slider-to-map');
+    if(toMapEl2) { toMapEl2.style.clipPath = 'inset(0 0 0 50%)'; var cv2 = toMapEl2.querySelector('canvas'); if(cv2) cv2.style.clipPath = 'inset(0 0 0 50%)'; }
     var handle = document.getElementById('split-slider-handle');
     if(handle) handle.style.left = '50%';
     // Reset main map to satellite basemap and fit Accra bounds
@@ -5890,31 +5861,36 @@ function splitToggleWayback() {
     }
   }
 
-  // Reload both map styles with the new imagery source — no token needed
-  var fromStyle, toStyle;
-  if(_splitUseWayback && _waybackVintagesLoaded && ESRI_WAYBACK_VINTAGES.length) {
-    fromStyle = getWaybackTileStyle(fromY, fromY) || uwBuildYearStyle(fromY);
-    toStyle   = getWaybackTileStyle(toY,   toY)   || uwBuildYearStyle(toY);
-    if(status) status.textContent = '📅 Esri Wayback · ' + fromY + ' / ' + toY;
-    uwToast('Switched to Esri Wayback satellite archive', 'info');
-  } else {
-    fromStyle = uwBuildYearStyle(fromY);
-    toStyle   = uwBuildYearStyle(toY);
-    if(status) status.textContent = '🛰 Google Satellite imagery';
-    uwToast('Switched to Google satellite imagery', 'info');
-  }
-  if(splitState.mapFrom) {
-    try { splitState.mapFrom.setStyle(fromStyle); } catch(e){}
-    splitState.mapFrom.once('styledata', function(){
-      try { addRiversToSplitMap(splitState.mapFrom, fromY); } catch(e){}
-    });
-  }
-  if(splitState.mapTo) {
-    try { splitState.mapTo.setStyle(toStyle); } catch(e){}
-    splitState.mapTo.once('styledata', function(){
-      try { addRiversToSplitMap(splitState.mapTo, toY); } catch(e){}
-    });
-  }
+  // Reload both map styles with the new imagery source
+  getSentinelToken().then(function(token) {
+    var fromStyle, toStyle;
+    if(_splitUseWayback && _waybackVintagesLoaded && ESRI_WAYBACK_VINTAGES.length) {
+      fromStyle = getWaybackTileStyle(fromY, fromY) || uwBuildYearStyle(fromY);
+      toStyle   = getWaybackTileStyle(toY,   toY)   || uwBuildYearStyle(toY);
+      if(status) status.textContent = '📅 Esri Wayback · ' + fromY + ' / ' + toY;
+      uwToast('Switched to Esri Wayback satellite archive', 'info');
+    } else {
+      fromStyle = uwBuildYearStyle(fromY);
+      toStyle   = uwBuildYearStyle(toY);
+      if(status) status.textContent = '🛰 Google Satellite · Esri Wayback';
+      uwToast('Switched to Copernicus Sentinel-2', 'info');
+    }
+    if(splitState.mapFrom) {
+      try { splitState.mapFrom.setStyle(fromStyle); } catch(e){}
+      // Re-add rivers after style reload
+      splitState.mapFrom.once('styledata', function(){
+        try { addRiversToSplitMap(splitState.mapFrom, fromY); } catch(e){}
+      });
+    }
+    if(splitState.mapTo) {
+      try { splitState.mapTo.setStyle(toStyle); } catch(e){}
+      splitState.mapTo.once('styledata', function(){
+        try { addRiversToSplitMap(splitState.mapTo, toY); } catch(e){}
+      });
+    }
+  }).catch(function(){
+    uwToast('Failed to switch imagery source', 'error');
+  });
 }
 
 // ── Floating Key Card — show/hide/dismiss ──────────────────────────

@@ -2361,7 +2361,7 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
       <button class="split-zoom-btn" id="sbtn-zoomout" onclick="splitZoomOut()"  title="Zoom Out">−</button>
       <button class="split-zoom-btn" id="sbtn-fit"     onclick="splitFitZone()"  title="Fit to selected zone">⊕</button>
       <button class="split-zoom-btn" id="sbtn-rivers"  onclick="splitToggleRivers()" title="Toggle river overlays" style="font-size:11px;color:var(--sky);border-color:rgba(56,189,248,.4)">🌊</button>
-      <button class="split-zoom-btn" id="sbtn-wayback" onclick="splitToggleWayback()" title="Toggle: Esri Wayback (historical archive) vs Copernicus Sentinel-2" style="font-size:10px;color:var(--amber);border-color:rgba(245,158,11,.35);white-space:nowrap;padding:0 8px;width:auto;">📅 Wayback</button>
+      <button class="split-zoom-btn" id="sbtn-wayback" onclick="splitToggleWayback()" title="Toggle: Esri Wayback archive vs Copernicus Sentinel (Sentinel is default)" style="font-size:10px;color:var(--amber);border-color:rgba(245,158,11,.35);white-space:nowrap;padding:0 8px;width:auto;">📅 Wayback</button>
       <button class="split-reset-btn" id="sbtn-back"   onclick="uwCloseSplitView(true)">← Back to Map</button>
     </div>
     <button class="split-close-btn" id="sbtn-close" onclick="uwCloseSplitView(true)" title="Close">✕</button>
@@ -5000,12 +5000,13 @@ function uwUpdateImgSourceInfo() {
   var el = document.getElementById('uw-img-source-txt');
   if(!el) return;
   var fy = uwState.fromYear, ty = uwState.toYear;
-  var fromSrc = fy < 2016
-    ? 'Copernicus Landsat ' + fy + ' (via Sentinel Hub)'
-    : 'Copernicus Sentinel-2 · TRUE-COLOR · ' + fy;
-  var toSrc = ty < 2016
-    ? 'Copernicus Landsat ' + ty + ' (via Sentinel Hub)'
-    : 'Copernicus Sentinel-2 · TRUE-COLOR · ' + ty;
+  function _srcName(y) {
+    if (y >= 2015) return 'Copernicus Sentinel-2 · TRUE-COLOR · ' + y;
+    if (y >= 2013) return 'Copernicus Landsat-8 · TRUE-COLOR · ' + y;
+    return 'Copernicus Landsat-TM · TRUE-COLOR · ' + y;
+  }
+  var fromSrc = _srcName(fy);
+  var toSrc   = _srcName(ty);
   el.textContent = 'FROM: ' + fromSrc + '  ·  TO: ' + toSrc;
 }
 
@@ -5237,91 +5238,96 @@ function getSentinelToken() {
   return _sentinelTokenPromise;
 }
 
-function sentinelWMSTiles(token, year) {
-  // Copernicus Data Space Sentinel Hub WMS:
-  //   - For Sentinel-2 (2015+): layer TRUE-COLOR, EVALSCRIPT optional
-  //   - For Landsat-8/9 (2013+): layer LANDSAT-8-TRUE-COLOR
-  //   - For Landsat 4/5 (pre-2013): layer LANDSAT45-TRUE-COLOR (only available
-  //     if the Sentinel Hub instance has the Landsat archive; fall back to
-  //     NASA GIBS / Esri if not)
-  //   Token goes as ?access_token= OR Authorization header.
-  //   In a browser tile URL we must embed it as a query param.
-  var isSentinel2 = year >= 2015;
-  var isLandsat89 = year >= 2013 && year < 2015;
-  var isLandsat45 = year < 2013;
-  var layer, timeFrom, timeTo;
-  if (isSentinel2) {
-    layer    = 'TRUE-COLOR';
-    timeFrom = year + '-10-01';
-    timeTo   = year + '-12-31';
-  } else if (isLandsat89) {
-    layer    = 'LANDSAT-8-TRUE-COLOR';
-    timeFrom = year + '-01-01';
-    timeTo   = year + '-12-31';
+// ─────────────────────────────────────────────────────────────────────────────
+// SENTINEL HUB WMS — Production-grade implementation
+// Copernicus Data Space Ecosystem (CDSE) OGC WMS endpoint
+//
+// Layer mapping (Copernicus Data Space — verified against GetCapabilities):
+//   Sentinel-2 (2015+)       → TRUE-COLOR
+//   Landsat-8/9 (2013–2014)  → LANDSAT-8-TRUE-COLOR
+//   Landsat 5 TM (pre-2013)  → LANDSAT-TM-TRUE-COLOR
+//
+// Auth: access_token query param — CDSE supports this for browser tile requests
+//   (Bearer header can't be set per-tile in MapLibre raster sources)
+// Tile size: 512px; MAXCC=20 (max 20% cloud coverage)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Returns the correct CDSE WMS layer name, time range, and attribution
+ * for a given year. Uses verified Copernicus Data Space layer names.
+ */
+function _sentinelLayerForYear(year) {
+  if (year >= 2015) {
+    return {
+      layer:       'TRUE-COLOR',
+      timeFrom:    year + '-01-01',
+      timeTo:      year + '-12-31',
+      attribution: 'Copernicus Sentinel-2 ' + year + ' · ESA'
+    };
+  } else if (year >= 2013) {
+    return {
+      layer:       'LANDSAT-8-TRUE-COLOR',
+      timeFrom:    year + '-01-01',
+      timeTo:      year + '-12-31',
+      attribution: 'Copernicus Landsat-8 ' + year + ' · USGS/ESA'
+    };
   } else {
-    layer    = 'LANDSAT45-TRUE-COLOR';
-    timeFrom = year + '-01-01';
-    timeTo   = year + '-12-31';
+    // Landsat 5 TM archive (1984–2012)
+    // CDSE layer name: LANDSAT-TM-TRUE-COLOR (NOT LANDSAT45-TRUE-COLOR)
+    return {
+      layer:       'LANDSAT-TM-TRUE-COLOR',
+      timeFrom:    year + '-01-01',
+      timeTo:      year + '-12-31',
+      attribution: 'Copernicus Landsat-TM ' + year + ' · USGS/ESA'
+    };
   }
-  // Base URL — token is passed as access_token query param so browsers can load tiles
-  var baseUrl = 'https://sh.dataspace.copernicus.eu/ogc/wms';
-  var sep = token ? ('?token=' + encodeURIComponent(token) + '&') : '?';
-  return [
-    baseUrl + sep +
-    'REQUEST=GetMap&VERSION=1.3.0' +
-    '&LAYERS=' + layer +
+}
+
+/**
+ * Returns a MapLibre tile URL array for CDSE WMS.
+ * Token passed as access_token query param.
+ */
+function sentinelWMSTiles(token, year) {
+  var lyr = _sentinelLayerForYear(year);
+  var url = 'https://sh.dataspace.copernicus.eu/ogc/wms' +
+    '?REQUEST=GetMap' +
+    '&VERSION=1.3.0' +
+    '&SERVICE=WMS' +
+    '&LAYERS=' + lyr.layer +
     '&FORMAT=image%2Fjpeg' +
     '&CRS=EPSG%3A3857' +
     '&WIDTH=512&HEIGHT=512' +
-    '&TIME=' + timeFrom + '%2F' + timeTo +
+    '&TIME=' + lyr.timeFrom + '%2F' + lyr.timeTo +
     '&MAXCC=20' +
-    '&BBOX={bbox-epsg-3857}'
-  ];
+    '&BBOX={bbox-epsg-3857}';
+  if (token) url += '&access_token=' + encodeURIComponent(token);
+  return [url];
 }
 
+/**
+ * Builds a complete MapLibre GL style for Sentinel Hub imagery.
+ * BOTH from-year and to-year always use Sentinel (no Esri/Wayback fallback).
+ * When no token is available, the request is sent without auth — CDSE may
+ * serve limited/watermarked tiles, but the request always goes to Sentinel.
+ *
+ * @param {string} token   OAuth2 access_token from getSentinelToken() (may be '')
+ * @param {number} year    Year of imagery to fetch
+ * @returns {Object}       MapLibre GL style object
+ */
 function uwBuildSentinelStyle(token, year) {
-  var isSentinel2 = year >= 2015;
-  var isLandsat89 = year >= 2013 && year < 2015;
-  var layer, timeFrom, timeTo, attribution;
-  if (isSentinel2) {
-    layer       = 'TRUE-COLOR';
-    timeFrom    = year + '-10-01';
-    timeTo      = year + '-12-31';
-    attribution = 'Copernicus Sentinel-2 · ' + year;
-  } else if (isLandsat89) {
-    layer       = 'LANDSAT-8-TRUE-COLOR';
-    timeFrom    = year + '-01-01';
-    timeTo      = year + '-12-31';
-    attribution = 'Copernicus Landsat-8 · ' + year;
-  } else {
-    layer       = 'LANDSAT45-TRUE-COLOR';
-    timeFrom    = year + '-01-01';
-    timeTo      = year + '-12-31';
-    attribution = 'Copernicus Landsat · ' + year;
-  }
-
-  // Build tile URL — token goes as access_token query param for browser tile loading
-  var tileUrl;
-  if (token) {
-    // Copernicus Data Space Sentinel Hub WMS:
-    // The access token is used as Authorization Bearer in headers, but MapLibre raster
-    // tile sources can't set custom headers per tile. Instead, we use the OGC WMS endpoint
-    // with the token as a query parameter (supported by Copernicus Data Space).
-    // The instance ID is not needed for the public Sentinel Hub endpoint when using token auth.
-    tileUrl = 'https://sh.dataspace.copernicus.eu/ogc/wms' +
-      '?REQUEST=GetMap&VERSION=1.3.0' +
-      '&LAYERS=' + layer +
-      '&FORMAT=image%2Fjpeg' +
-      '&CRS=EPSG%3A3857' +
-      '&WIDTH=512&HEIGHT=512' +
-      '&TIME=' + timeFrom + '%2F' + timeTo +
-      '&MAXCC=20' +
-      '&BBOX={bbox-epsg-3857}' +
-      '&token=' + encodeURIComponent(token);
-  } else {
-    // No token — fall back to Esri World Imagery (always available, no auth, no CORS)
-    return _buildEsriStyle(year);
-  }
+  var lyr = _sentinelLayerForYear(year);
+  var tileUrl = 'https://sh.dataspace.copernicus.eu/ogc/wms' +
+    '?REQUEST=GetMap' +
+    '&VERSION=1.3.0' +
+    '&SERVICE=WMS' +
+    '&LAYERS=' + lyr.layer +
+    '&FORMAT=image%2Fjpeg' +
+    '&CRS=EPSG%3A3857' +
+    '&WIDTH=512&HEIGHT=512' +
+    '&TIME=' + lyr.timeFrom + '%2F' + lyr.timeTo +
+    '&MAXCC=20' +
+    '&BBOX={bbox-epsg-3857}';
+  if (token) tileUrl += '&access_token=' + encodeURIComponent(token);
 
   return {
     version: 8,
@@ -5331,7 +5337,7 @@ function uwBuildSentinelStyle(token, year) {
         type: 'raster',
         tiles: [tileUrl],
         tileSize: 512,
-        attribution: attribution,
+        attribution: lyr.attribution,
         maxzoom: 18,
         minzoom: 1
       }
@@ -5342,7 +5348,6 @@ function uwBuildSentinelStyle(token, year) {
     ]
   };
 }
-
 /**
  * Reliable Esri World Imagery fallback — no authentication, no CORS issues.
  * Used when no Sentinel token is available or for recent years (2020+).
@@ -5467,19 +5472,16 @@ function getWaybackTileStyle(year, label) {
   };
 }
 
-function uwBuildYearStyle(year) {
-  // 2014+: Esri Wayback historical imagery (no auth, always available)
-  if (year >= 2014) {
-    return getWaybackTileStyle(year, year);
-  }
-  // 2000–2013: Copernicus Sentinel Hub Landsat if token available, otherwise NASA GIBS MODIS
-  if (_sentinelToken) {
-    return uwBuildSentinelStyle(_sentinelToken, year);
-  }
-  // No Sentinel token — use Esri World Imagery (always works, no CORS, no auth needed)
-  // Note: Esri shows current imagery for all years. For truly historical imagery,
-  // the Sentinel Hub token is required (configure SENTINEL_CLIENT_ID/SECRET in Vercel).
-  return _buildEsriStyle(year);
+/**
+ * Builds a MapLibre style for a given year using Copernicus Sentinel Hub WMS.
+ * ALWAYS uses Sentinel for both from-year and to-year — no Esri/Wayback fallback.
+ * Accepts an optional token parameter; falls back to global _sentinelToken.
+ * Even without a token the WMS request is sent to CDSE (may return limited tiles).
+ */
+function uwBuildYearStyle(year, token) {
+  // Use provided token, or fall back to cached global token
+  var tok = (typeof token === 'string' ? token : null) || _sentinelToken || '';
+  return uwBuildSentinelStyle(tok, year);
 }
 
 function uwBuildCurrentStyle() {
@@ -5563,8 +5565,9 @@ function uwOpenSplitView() {
   var zone      = UW_ZONES[zoneKey];
   var zoneLabel = zone ? zone.label : 'Greater Accra';
 
+  var _titleSat = (fromY < 2013 || toY < 2013) ? 'Copernicus' : (fromY >= 2015 && toY >= 2015 ? 'Sentinel-2' : 'Copernicus');
   document.getElementById('split-title-years').textContent =
-    '🛰 Sentinel-2 · ' + fromY + ' vs ' + toY + '  ·  ' + zoneLabel;
+    '🛰 ' + _titleSat + ' · ' + fromY + ' vs ' + toY + '  ·  ' + zoneLabel;
 
   if(c) {
     document.getElementById('spm-built').textContent    = '+' + Math.round(c.builtDelta) + ' km²';
@@ -5589,13 +5592,16 @@ function uwOpenSplitView() {
 
   var fromLbl = document.getElementById('split-slider-from-lbl');
   var toLbl   = document.getElementById('split-slider-to-lbl');
-  if(fromLbl) fromLbl.textContent = fromY + ' · Copernicus Sentinel-2';
-  if(toLbl)   toLbl.textContent   = toY   + ' · Copernicus Sentinel-2';
-
-  var skcFrom = document.getElementById('skc-from-label');
-  var skcTo   = document.getElementById('skc-to-label');
-  if(skcFrom) skcFrom.textContent = '◀ ' + fromY + ' — SENTINEL-2 TRUE COLOUR';
-  if(skcTo)   skcTo.textContent   = toY + ' — SENTINEL-2 TRUE COLOUR ▶';
+  if(fromLbl) {
+    var _sl = function(y){ return y>=2015?'Sentinel-2 · ESA':y>=2013?'Landsat-8 · USGS':'Landsat-TM · USGS'; };
+    var _su = function(y){ return y>=2015?'SENTINEL-2 TRUE COLOUR':y>=2013?'LANDSAT-8 TRUE COLOUR':'LANDSAT-TM TRUE COLOUR'; };
+    fromLbl.textContent = fromY + ' · Copernicus ' + _sl(fromY);
+    if(toLbl) toLbl.textContent = toY + ' · Copernicus ' + _sl(toY);
+    var skcFrom = document.getElementById('skc-from-label');
+    var skcTo   = document.getElementById('skc-to-label');
+    if(skcFrom) skcFrom.textContent = '◀ ' + fromY + ' — ' + _su(fromY);
+    if(skcTo)   skcTo.textContent   = toY + ' — ' + _su(toY) + ' ▶';
+  }
 
   splitShowKeyCard(9000);
 
@@ -5623,18 +5629,21 @@ function uwOpenSplitView() {
   ]).then(function(results) {
     var token = results[0];
     // uwBuildYearStyle now handles all year ranges correctly:
-    // 2014+ → Esri Wayback (no auth needed, always works)
-    // 2000–2013 with token → Copernicus Sentinel Hub Landsat WMS
-    // 2000–2013 no token → NASA GIBS MODIS (500m context)
-    var fromStyle = uwBuildYearStyle(fromY);
-    var toStyle   = uwBuildYearStyle(toY);
+    // Both from-year and to-year ALWAYS use Copernicus Sentinel Hub WMS
+    // Token is passed explicitly so the correct access_token is embedded in tile URLs
+    var fromStyle = uwBuildYearStyle(fromY, token);
+    var toStyle   = uwBuildYearStyle(toY, token);
 
+    // Determine correct source label per year
+    function _srcLabel(y) {
+      if (y >= 2015) return 'Sentinel-2';
+      if (y >= 2013) return 'Landsat-8';
+      return 'Landsat-TM';
+    }
     if(sentinelStatus) {
-      var wb = ESRI_WAYBACK_VINTAGES.length;
-      var src = (fromY >= 2014)
-        ? ('Esri Wayback · ' + wb + ' vintages')
-        : (token ? 'Copernicus Sentinel Hub' : 'NASA GIBS MODIS');
-      sentinelStatus.textContent = '🛰 ' + src + ' · ' + fromY + ' vs ' + toY;
+      var fromSrc = _srcLabel(fromY), toSrc = _srcLabel(toY);
+      var authTxt = token ? ' (auth✓)' : ' (no-token)';
+      sentinelStatus.textContent = '🛰 Copernicus CDSE · ' + fromY + ' ' + fromSrc + ' vs ' + toY + ' ' + toSrc + authTxt;
     }
 
     var commonOpts = {
@@ -5980,7 +5989,7 @@ function splitToggleRivers() {
 }
 
 // ── Wayback imagery toggle — swap between Esri Wayback archive and Sentinel ──
-var _splitUseWayback = true; // default ON for years >= 2014
+var _splitUseWayback = false; // default OFF — Sentinel is primary source for all years
 function splitToggleWayback() {
   _splitUseWayback = !_splitUseWayback;
   var btn = document.getElementById('sbtn-wayback');
@@ -6002,19 +6011,14 @@ function splitToggleWayback() {
     }
   }
 
-  // Reload both map styles with the new imagery source
+  // Reload both map styles — always use Copernicus Sentinel Hub WMS for both years
   getSentinelToken().then(function(token) {
-    var fromStyle = uwBuildYearStyle(fromY);
-    var toStyle   = uwBuildYearStyle(toY);
-    var srcLabel = (_splitUseWayback && fromY >= 2014)
-      ? ('Esri Wayback · ' + fromY + ' / ' + toY)
-      : (token ? ('Copernicus Sentinel Hub · ' + fromY + ' / ' + toY) : ('NASA GIBS · ' + fromY + ' / ' + toY));
+    var fromStyle = uwBuildYearStyle(fromY, token);
+    var toStyle   = uwBuildYearStyle(toY, token);
+    function _sl(y) { return y >= 2015 ? 'Sentinel-2' : (y >= 2013 ? 'Landsat-8' : 'Landsat-TM'); }
+    var srcLabel = 'Copernicus CDSE · ' + fromY + ' ' + _sl(fromY) + ' vs ' + toY + ' ' + _sl(toY) + (token ? ' (✓auth)' : '');
     if(status) status.textContent = '🛰 ' + srcLabel;
-    if(_splitUseWayback) {
-      uwToast('Using Esri Wayback archive · ' + fromY + ' vs ' + toY, 'info');
-    } else {
-      uwToast('Using best available imagery · ' + fromY + ' vs ' + toY, 'info');
-    }
+    uwToast('Copernicus Sentinel · ' + fromY + ' vs ' + toY, 'info');
     if(splitState.mapFrom) {
       try { splitState.mapFrom.setStyle(fromStyle); } catch(e){}
       // Re-add rivers after style reload

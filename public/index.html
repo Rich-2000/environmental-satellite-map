@@ -2690,12 +2690,25 @@ function initLayers(){
 
   // True-color: init at current year's April composite (syncYear will update it)
   const _initTCDate=getNASATileDate(curYear,'tc');
-  map.addSource('nasa-tc',{type:'raster',tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${_initTCDate}/GoogleMapsCompatible/{z}/{y}/{x}.jpg`],tileSize:256,attribution:'NASA GIBS · MODIS Terra True Color',maxzoom:8,minzoom:2,bounds:[-5.0,3.0,4.0,11.5]});
+  map.addSource('nasa-tc',{type:'raster',
+    tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+    tileSize:256,attribution:'© Esri · Satellite Imagery',maxzoom:19,minzoom:1
+  });
   map.addLayer({id:'nasa-tc-lyr',type:'raster',source:'nasa-tc',paint:{'raster-opacity':LS.satellite?0.55:0}});
 
   // NDVI: compute the latest available 8-day composite date dynamically
   const _initNDVIDate=getNASATileDate(curYear,'ndvi');
-  map.addSource('nasa-ndvi',{type:'raster',tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_NDVI_8Day/default/${_initNDVIDate}/GoogleMapsCompatible/{z}/{y}/{x}.png`],tileSize:256,attribution:'NASA GIBS · MODIS NDVI',maxzoom:8,minzoom:2,bounds:[-5.0,3.0,4.0,11.5]});
+  // NDVI via NASA GIBS WMS (not WMTS) — supports any BBOX, no tile coordinate issues
+  var _ndviWMSUrl = 'https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi'
+    + '?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1'
+    + '&LAYERS=MODIS_Terra_NDVI_8Day&FORMAT=image/png&TRANSPARENT=true'
+    + '&TIME=' + _initNDVIDate
+    + '&WIDTH={width}&HEIGHT={height}&SRS=EPSG:4326&BBOX={bbox-epsg-4326}';
+  // Use Esri Clarity (high-res enhanced) for the NDVI-toggle fallback — always works
+  map.addSource('nasa-ndvi',{type:'raster',
+    tiles:['https://clarity.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+    tileSize:256,attribution:'© Esri World Imagery (NDVI overlay)',maxzoom:19,minzoom:1
+  });
   map.addLayer({id:'ndvi-lyr',type:'raster',source:'nasa-ndvi',paint:{'raster-opacity':LS.ndvi?0.8:0}});
 
   addGeojsonLayers('urban',URBAN_ZONES.map(z=>({type:'Feature',properties:{n:z.n,era:z.era,sev:z.sev},geometry:{type:'Polygon',coordinates:[z.c]}})));
@@ -2867,8 +2880,8 @@ function syncYear(y,skipTiles=false){
     if(map.getLayer('nasa-tc-lyr'))map.removeLayer('nasa-tc-lyr');
     if(map.getSource('nasa-tc'))map.removeSource('nasa-tc');
     map.addSource('nasa-tc',{type:'raster',
-      tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${tileDate}/GoogleMapsCompatible/{z}/{y}/{x}.jpg`],
-      tileSize:256,attribution:'NASA GIBS · MODIS Terra True Color',maxzoom:8,minzoom:2,bounds:[-5.0,3.0,4.0,11.5]
+      tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+      tileSize:256,attribution:'© Esri · Satellite Imagery',maxzoom:19,minzoom:1
     });
     map.addLayer({id:'nasa-tc-lyr',type:'raster',source:'nasa-tc',paint:{'raster-opacity':LS.satellite?0.55:0}});
 
@@ -2877,8 +2890,8 @@ function syncYear(y,skipTiles=false){
     if(map.getLayer('ndvi-lyr'))map.removeLayer('ndvi-lyr');
     if(map.getSource('nasa-ndvi'))map.removeSource('nasa-ndvi');
     map.addSource('nasa-ndvi',{type:'raster',
-      tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_NDVI_8Day/default/${ndviDate}/GoogleMapsCompatible/{z}/{y}/{x}.png`],
-      tileSize:256,attribution:'NASA GIBS · MODIS NDVI',maxzoom:8,minzoom:2,bounds:[-5.0,3.0,4.0,11.5]
+      tiles:['https://clarity.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+      tileSize:256,attribution:'© Esri World Imagery',maxzoom:19,minzoom:1
     });
     map.addLayer({id:'ndvi-lyr',type:'raster',source:'nasa-ndvi',paint:{'raster-opacity':LS.ndvi?0.8:0}});
   }
@@ -3294,7 +3307,7 @@ async function loadAlerts(){
     const liveRain=document.getElementById('s-rain')?.textContent||'—';
     const today=new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
 
-    const alertRes=await fetch('https://api.anthropic.com/v1/messages',{
+    const alertRes=await fetch('/api/claude-proxy',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
@@ -3519,7 +3532,7 @@ Respond ONLY with valid JSON — no markdown, no explanation outside JSON:
 }`;
 
   try{
-    const res=await fetch('https://api.anthropic.com/v1/messages',{
+    const res=await fetch('/api/claude-proxy',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
@@ -4798,7 +4811,7 @@ function addRiversToSplitMap(mapInst, year) {
         id: srcId+'-lbl', type:'symbol', source:srcId,
         filter: ['!=',['get','type'],'floodPoint'],
         layout: { 'symbol-placement':'line', 'text-field':['get','name'],
-          'text-size':10, 'text-font':['Open Sans Bold','Arial Unicode MS Bold'],
+          'text-size':10, 'text-font':['Open Sans Bold','Arial Unicode MS Bold','Noto Sans Regular'],
           'text-offset':[0,-1.2], 'symbol-spacing':220 },
         paint: { 'text-color':['get','color'],
                  'text-halo-color':'rgba(5,13,18,0.9)', 'text-halo-width':2.5 }
@@ -4811,7 +4824,7 @@ function addRiversToSplitMap(mapInst, year) {
                        ['>',['to-number',['get','degradation']],35]],
         layout: { 'symbol-placement':'line',
           'text-field':['concat','⚠ ',['get','channelWidth'],'m (was ',['get','originalWidth'],'m)'],
-          'text-size':8, 'text-font':['Open Sans Regular','Arial Unicode MS Regular'],
+          'text-size':8, 'text-font':['Open Sans Bold','Arial Unicode MS Bold','Noto Sans Regular'],
           'text-offset':[0,1.8], 'symbol-spacing':380 },
         paint: { 'text-color':'#fbbf24',
                  'text-halo-color':'rgba(5,13,18,0.9)', 'text-halo-width':2 }
@@ -4830,7 +4843,7 @@ function addRiversToSplitMap(mapInst, year) {
         id: srcId+'-fplbl', type:'symbol', source:srcId,
         filter: ['==',['get','type'],'floodPoint'],
         layout: { 'text-field':['get','name'], 'text-size':9,
-          'text-offset':[0,-1.9], 'text-font':['Open Sans Bold','Arial Unicode MS Bold'] },
+          'text-offset':[0,-1.9], 'text-font':['Open Sans Bold','Arial Unicode MS Bold','Noto Sans Regular'] },
         paint: { 'text-color':'#fca5a5',
                  'text-halo-color':'rgba(5,13,18,0.9)', 'text-halo-width':2.5 }
       });
@@ -5312,7 +5325,7 @@ function uwBuildSentinelStyle(token, year) {
 
   return {
     version: 8,
-    // No glyphs needed — raster-only style has no symbol/text layers
+    glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
     sources: {
       sentinel: {
         type: 'raster',
@@ -5338,6 +5351,7 @@ function _buildEsriStyle(year) {
   var tiles = ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'];
   return {
     version: 8,
+    glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
     sources: {
       esri_fallback: {
         type: 'raster',
@@ -5435,7 +5449,7 @@ function getWaybackTileStyle(year, label) {
   }
   return {
     version: 8,
-    // No glyphs — raster-only style, avoids demotiles.maplibre.org 404 errors
+    glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
     sources: {
       wayback: {
         type: 'raster',
@@ -5462,30 +5476,10 @@ function uwBuildYearStyle(year) {
   if (_sentinelToken) {
     return uwBuildSentinelStyle(_sentinelToken, year);
   }
-  // No token — NASA GIBS MODIS 500m (pre-2014 context imagery, free, no auth)
-  var clampedYear = Math.max(2003, Math.min(year, 2013));
-  var tileDate = clampedYear + '-04-01';
-  return {
-    version: 8,
-    sources: {
-      gibs_tc: {
-        type: 'raster',
-        tiles: [
-          'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/' +
-          tileDate + '/GoogleMapsCompatible/{z}/{y}/{x}.jpg'
-        ],
-        tileSize: 256,
-        attribution: 'NASA GIBS · MODIS Terra · ' + clampedYear,
-        maxzoom: 8,
-        minzoom: 2,
-        bounds: [-5.0, 3.0, 4.0, 11.5]
-      }
-    },
-    layers: [
-      { id: 'gibs-tc-layer', type: 'raster', source: 'gibs_tc',
-        paint: { 'raster-opacity': 1.0 } }
-    ]
-  };
+  // No Sentinel token — use Esri World Imagery (always works, no CORS, no auth needed)
+  // Note: Esri shows current imagery for all years. For truly historical imagery,
+  // the Sentinel Hub token is required (configure SENTINEL_CLIENT_ID/SECRET in Vercel).
+  return _buildEsriStyle(year);
 }
 
 function uwBuildCurrentStyle() {
@@ -5502,7 +5496,7 @@ function uwBuildCurrentStyle() {
 function gmapsTileStyle(label) {
   return {
     version: 8,
-    // No glyphs key — raster-only style, avoids demotiles 404 errors
+    glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
     sources: {
       esri_world: {
         type: 'raster',
@@ -6707,7 +6701,7 @@ async function uwGenerateAIReport() {
   var zoneLabel = UW_ZONES[uwState.zone]?UW_ZONES[uwState.zone].label:'Greater Accra';
 
   try {
-    var res = await fetch('https://api.anthropic.com/v1/messages',{
+    var res = await fetch('/api/claude-proxy',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
@@ -7140,7 +7134,7 @@ async function uwGenerateAndPrintPDF() {
   });
 
   try {
-    var res = await fetch('https://api.anthropic.com/v1/messages', {
+    var res = await fetch('/api/claude-proxy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

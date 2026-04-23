@@ -5184,7 +5184,7 @@ var _sentinelTokenExpiry = 0;
 // All imagery uses Esri Wayback / Google Maps tiles which need no auth.
 // When a real Sentinel token is available it can be set via _sentinelToken directly.
 function getSentinelToken() {
-  return Promise.resolve(_sentinelToken || '');
+  return Promise.resolve(_sentinelToken || '/api/sentinel-token');
 }
 
 function sentinelWMSTiles(token, year) {

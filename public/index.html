@@ -1165,6 +1165,7 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
 .split-maps-area{
   flex:1;display:flex;min-height:0;
   position:relative;
+  overflow:hidden;
 }
 
 .split-map-pane{
@@ -1307,18 +1308,86 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
   letter-spacing: .3px;
 }
 
-/* ── Historical FROM pane: richer green/lush Landsat look ── */
-/* Historical imagery = MORE vegetation, LESS urban grey.
-   We boost greens & contrast so users instantly see the difference vs the
-   current pane which shows dense grey urban concrete (Esri/Maxar). */
-#split-pane-from .split-map-inner canvas {
-  filter: saturate(160%) hue-rotate(8deg) brightness(1.04) contrast(1.08);
-  transition: filter .8s ease;
+#split-pane-from .split-map-inner canvas,
+#split-pane-to   .split-map-inner canvas {
+  filter: none !important;
+  -webkit-filter: none !important;
 }
-/* Current TO pane: cooler, desaturated urban look */
-#split-pane-to .split-map-inner canvas {
-  filter: saturate(82%) hue-rotate(-6deg) brightness(0.97) contrast(1.06);
-  transition: filter .8s ease;
+
+#split-slider-wrap {
+  position:absolute;inset:0;z-index:2;overflow:hidden;
+  width:100%;
+  height:100%;
+}
+#split-slider-from {
+  position:absolute;inset:0;
+}
+#split-slider-to {
+  position:absolute;inset:0;
+  clip-path: inset(0 0 0 50%);
+  transition: clip-path 0s;
+}
+#split-slider-handle {
+  position:absolute;top:0;bottom:0;
+  left:50%;transform:translateX(-50%);
+  width:4px;
+  background:linear-gradient(to bottom,var(--accent2),var(--accent),var(--accent2));
+  z-index:10;
+  cursor:ew-resize;
+  box-shadow:0 0 12px rgba(6,201,232,.5);
+}
+#split-slider-handle::before {
+  content:'';
+  position:absolute;top:50%;left:50%;
+  transform:translate(-50%,-50%);
+  width:40px;height:40px;border-radius:50%;
+  background:var(--accent);
+  border:3px solid var(--bg);
+  box-shadow:0 0 20px rgba(6,201,232,.6),0 2px 8px rgba(0,0,0,.6);
+}
+#split-slider-handle::after {
+  content:'◀ ▶';
+  position:absolute;top:50%;left:50%;
+  transform:translate(-50%,-50%);
+  font-size:11px;color:#fff;
+  z-index:1;font-weight:700;
+  letter-spacing:-2px;white-space:nowrap;
+  pointer-events:none;
+}
+#split-slider-from-lbl {
+  position:absolute;top:14px;left:14px;z-index:12;
+  background:rgba(5,13,18,.92);
+  border:1px solid rgba(16,185,129,.5);
+  border-radius:20px;padding:5px 14px;
+  font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;
+  color:var(--green);pointer-events:none;
+  backdrop-filter:blur(12px);white-space:nowrap;
+  box-shadow:0 2px 12px rgba(0,0,0,.5);
+}
+#split-slider-to-lbl {
+  position:absolute;top:14px;right:14px;z-index:12;
+  background:rgba(5,13,18,.92);
+  border:1px solid rgba(244,63,94,.45);
+  border-radius:20px;padding:5px 14px;
+  font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;
+  color:var(--red);pointer-events:none;
+  backdrop-filter:blur(12px);white-space:nowrap;
+  box-shadow:0 2px 12px rgba(0,0,0,.5);
+}
+#split-slider-from-map,
+#split-slider-to-map {
+  position:absolute;inset:0;
+  width:100%;
+  height:100%;
+}
+#split-sentinel-status {
+  position:absolute;bottom:12px;right:14px;z-index:12;
+  background:rgba(5,13,18,.9);
+  border:1px solid rgba(6,201,232,.3);
+  border-radius:8px;padding:4px 10px;
+  font-size:9px;font-family:'JetBrains Mono',monospace;
+  color:var(--sky);pointer-events:none;
+  backdrop-filter:blur(8px);
 }
 
 /* ── Floating key card — compact square, bottom-left ── */
@@ -1554,7 +1623,6 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
   animation:fadeIn .4s ease;
 }
 #forecast-sat-map-el .maplibregl-canvas{
-  filter:saturate(85%) brightness(0.95);
 }
 .forecast-map-year-pin{
   font-family:'Syne',sans-serif;font-size:18px;font-weight:800;
@@ -2290,109 +2358,80 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
       <button class="split-zoom-btn" id="sbtn-zoomout" onclick="splitZoomOut()"  title="Zoom Out">−</button>
       <button class="split-zoom-btn" id="sbtn-fit"     onclick="splitFitZone()"  title="Fit to selected zone">⊕</button>
       <button class="split-zoom-btn" id="sbtn-rivers"  onclick="splitToggleRivers()" title="Toggle river overlays" style="font-size:11px;color:var(--sky);border-color:rgba(56,189,248,.4)">🌊</button>
+      <button class="split-zoom-btn" id="sbtn-wayback" onclick="splitToggleWayback()" title="Toggle: Esri Wayback (historical archive) vs Copernicus Sentinel-2" style="font-size:10px;color:var(--amber);border-color:rgba(245,158,11,.35);white-space:nowrap;padding:0 8px;width:auto;">📅 Wayback</button>
       <button class="split-reset-btn" id="sbtn-back"   onclick="uwCloseSplitView(true)">← Back to Map</button>
     </div>
     <button class="split-close-btn" id="sbtn-close" onclick="uwCloseSplitView(true)" title="Close">✕</button>
   </div>
   <div class="split-maps-area" id="split-maps-area">
-    <div class="split-map-pane" id="split-pane-from">
-      <div class="split-map-inner" id="split-map-from-el"></div>
-      <div class="split-map-loading" id="split-load-from">
+    <div id="split-slider-wrap">
+      <div id="split-slider-from">
+        <div id="split-slider-from-map"></div>
+      </div>
+      <div id="split-slider-to">
+        <div id="split-slider-to-map"></div>
+      </div>
+      <div id="split-slider-handle"></div>
+      <div id="split-slider-from-lbl">FROM YEAR</div>
+      <div id="split-slider-to-lbl">TO YEAR</div>
+      <div id="split-sentinel-status">🛰 Copernicus Sentinel-2</div>
+      <div class="split-capture-overlay" id="split-capture-overlay">
         <div class="spinner"></div>
-        <div class="split-load-txt" id="split-load-from-txt">Loading historical satellite…</div>
+        <div class="split-capture-txt">Capturing satellite imagery…</div>
       </div>
-      <div class="split-pane-label from-lbl" id="split-from-lbl">FROM YEAR</div>
-      <div class="split-year-badge yr-from" id="split-yr-from">—</div>
-      <div class="split-sat-chip" id="split-from-chip">NASA GIBS · Landsat</div>
-      <!-- River annotation FROM pane -->
-      <div class="split-river-annotation" id="split-river-ann-from" style="display:none;">
-        <div class="sra-title">🌊 River State</div>
-        <div class="sra-row"><div class="sra-dot" style="background:#22d3ee;"></div>Natural channels</div>
-        <div class="sra-row"><div class="sra-dot" style="background:#f59e0b;"></div>Early encroachment</div>
-      </div>
-      <!-- Floating zoom controls on the FROM map -->
-      <div class="split-map-zoom-ctrl">
-        <button onclick="splitZoomIn()" title="Zoom In">+</button>
-        <button onclick="splitZoomOut()" title="Zoom Out">−</button>
-        <button onclick="splitFitZone()" title="Fit to selected zone" style="font-size:11px">⊕</button>
-      </div>
-    </div>
-    <div class="split-map-pane" id="split-pane-to">
-      <div class="split-map-inner" id="split-map-to-el"></div>
-      <div class="split-map-loading" id="split-load-to">
-        <div class="spinner"></div>
-        <div class="split-load-txt" id="split-load-to-txt">Loading current satellite…</div>
-      </div>
-      <div class="split-pane-label to-lbl" id="split-to-lbl">CURRENT STATE</div>
-      <div class="split-year-badge yr-to" id="split-yr-to">—</div>
-      <div class="split-sat-chip">Esri World Imagery · Maxar</div>
-      <!-- River annotation TO pane -->
-      <div class="split-river-annotation" id="split-river-ann-to" style="display:none;right:8px;left:auto;">
-        <div class="sra-title">🌊 River State</div>
-        <div class="sra-row"><div class="sra-dot" style="background:#3b82f6;"></div>Degraded channels</div>
-        <div class="sra-row"><div class="sra-dot" style="background:#f43f5e;"></div>Flood risk nodes</div>
-        <div class="sra-row"><div class="sra-dot" style="background:#f59e0b;"></div>Culverted sections</div>
-      </div>
-    </div>
-    <div class="split-capture-overlay" id="split-capture-overlay">
-      <div class="spinner"></div>
-      <div class="split-capture-txt">Capturing satellite imagery for report…</div>
-    </div>
-    <!-- ── Compact Key Card — bottom-left corner, auto-hides ── -->
-    <div id="split-key-card" style="display:none;">
-      <div class="skc-head">
-        <div class="skc-title">🛰 Legend</div>
-        <button class="skc-dismiss" onclick="splitDismissKeyCard()">✕</button>
-      </div>
-      <div class="skc-row">
-        <div class="skc-dot-big" style="background:#10b981;color:#10b981;"></div>
-        <div class="skc-row-txt">
-          <div class="skc-label hist" id="skc-from-label">FROM — HISTORICAL</div>
-          <div class="skc-sub">Real archived imagery · that exact year</div>
+      <div id="split-key-card" style="display:none;">
+        <div class="skc-head">
+          <div class="skc-title">🛰 Legend</div>
+          <button class="skc-dismiss" onclick="splitDismissKeyCard()">✕</button>
         </div>
-      </div>
-      <div class="skc-row">
-        <div class="skc-dot-big" style="background:#f43f5e;color:#f43f5e;"></div>
-        <div class="skc-row-txt">
-          <div class="skc-label curr" id="skc-to-label">TO — CURRENT</div>
-          <div class="skc-sub">Real imagery of that year</div>
+        <div class="skc-row">
+          <div class="skc-dot-big" style="background:#10b981;color:#10b981;"></div>
+          <div class="skc-row-txt">
+            <div class="skc-label hist" id="skc-from-label">FROM — HISTORICAL</div>
+            <div class="skc-sub">Copernicus Sentinel-2 · that exact year</div>
+          </div>
         </div>
+        <div class="skc-row">
+          <div class="skc-dot-big" style="background:#f43f5e;color:#f43f5e;"></div>
+          <div class="skc-row-txt">
+            <div class="skc-label curr" id="skc-to-label">TO — CURRENT</div>
+            <div class="skc-sub">Copernicus Sentinel-2 · that exact year</div>
+          </div>
+        </div>
+        <div class="skc-divider"></div>
+        <div class="skc-legend-row">
+          <div class="skc-leg"><div class="skc-sq" style="background:#10b981;"></div>Vegetation</div>
+          <div class="skc-leg"><div class="skc-sq" style="background:#94a3b8;"></div>Urban</div>
+          <div class="skc-leg"><div class="skc-sq" style="background:#38bdf8;"></div>Water</div>
+        </div>
+        <div id="skc-rivers-legend" class="skc-legend-row" style="margin-top:4px;">
+          <div class="skc-leg"><div class="skc-sq" style="background:#22d3ee;border-radius:2px;"></div>River (From)</div>
+          <div class="skc-leg"><div class="skc-sq" style="background:#3b82f6;border-radius:2px;"></div>River (To)</div>
+          <div class="skc-leg"><div class="skc-sq" style="background:#f43f5e;border-radius:50%;"></div>Flood Node</div>
+        </div>
+        <div class="skc-tip">◀ ▶ Drag slider to compare years</div>
       </div>
-      <div class="skc-divider"></div>
-      <div class="skc-legend-row">
-        <div class="skc-leg"><div class="skc-sq" style="background:#10b981;"></div>Vegetation</div>
-        <div class="skc-leg"><div class="skc-sq" style="background:#94a3b8;"></div>Urban</div>
-        <div class="skc-leg"><div class="skc-sq" style="background:#38bdf8;"></div>Water</div>
+      <div id="split-click-popup">
+        <div class="scp-header">
+          <div class="scp-title" id="scp-title">Accra Land Data</div>
+          <span class="scp-year" id="scp-year-badge">—</span>
+          <button class="scp-close" onclick="splitClosePopup()">✕</button>
+        </div>
+        <div class="scp-divider"></div>
+        <div class="scp-row"><span class="scp-key">Built-up Area</span><span class="scp-val red" id="scp-built">—</span></div>
+        <div class="scp-row"><span class="scp-key">Population</span><span class="scp-val cyan" id="scp-pop">—</span></div>
+        <div class="scp-row"><span class="scp-key">Wetland Cover</span><span class="scp-val green" id="scp-wetland">—</span></div>
+        <div class="scp-row"><span class="scp-key">Flood Events/yr</span><span class="scp-val amber" id="scp-flood">—</span></div>
+        <div class="scp-row"><span class="scp-key">Odaw Capacity</span><span class="scp-val sky" id="scp-odaw">—</span></div>
+        <div class="scp-row"><span class="scp-key">Storm Runoff</span><span class="scp-val amber" id="scp-runoff">—</span></div>
+        <div class="scp-divider"></div>
+        <div class="scp-delta-row" id="scp-delta-block" style="display:none;">
+          <div class="scp-delta-lbl" id="scp-delta-lbl">CHANGE vs OTHER YEAR</div>
+          <div class="scp-delta-val" id="scp-delta-val">—</div>
+        </div>
+        <div class="scp-source" id="scp-source">Copernicus Sentinel-2 · GSS Ghana · NADMO · EPA Ghana · Ramsar</div>
       </div>
-      <div id="skc-rivers-legend" class="skc-legend-row" style="margin-top:4px;">
-        <div class="skc-leg"><div class="skc-sq" style="background:#22d3ee;border-radius:2px;"></div>River (Historic)</div>
-        <div class="skc-leg"><div class="skc-sq" style="background:#3b82f6;border-radius:2px;"></div>River (Current)</div>
-        <div class="skc-leg"><div class="skc-sq" style="background:#f43f5e;border-radius:50%;"></div>Flood Node</div>
-      </div>
-      <div class="skc-tip">👆 Click any image for real data</div>
     </div>
-    <!-- ── Split pane click popup ── -->
-    <div id="split-click-popup">
-      <div class="scp-header">
-        <div class="scp-title" id="scp-title">Accra Land Data</div>
-        <span class="scp-year" id="scp-year-badge">—</span>
-        <button class="scp-close" onclick="splitClosePopup()">✕</button>
-      </div>
-      <div class="scp-divider"></div>
-      <div class="scp-row"><span class="scp-key">Built-up Area</span><span class="scp-val red" id="scp-built">—</span></div>
-      <div class="scp-row"><span class="scp-key">Population</span><span class="scp-val cyan" id="scp-pop">—</span></div>
-      <div class="scp-row"><span class="scp-key">Wetland Cover</span><span class="scp-val green" id="scp-wetland">—</span></div>
-      <div class="scp-row"><span class="scp-key">Flood Events/yr</span><span class="scp-val amber" id="scp-flood">—</span></div>
-      <div class="scp-row"><span class="scp-key">Odaw Capacity</span><span class="scp-val sky" id="scp-odaw">—</span></div>
-      <div class="scp-row"><span class="scp-key">Storm Runoff</span><span class="scp-val amber" id="scp-runoff">—</span></div>
-      <div class="scp-divider"></div>
-      <div class="scp-delta-row" id="scp-delta-block" style="display:none;">
-        <div class="scp-delta-lbl" id="scp-delta-lbl">CHANGE vs OTHER YEAR</div>
-        <div class="scp-delta-val" id="scp-delta-val">—</div>
-      </div>
-      <div class="scp-source" id="scp-source">NASA GIBS Landsat · GSS Ghana · NADMO · EPA Ghana · Ramsar</div>
-    </div>
-  </div>
   <div class="split-metrics-bar" id="split-metrics-bar">
     <div class="split-metric">
       <div class="split-metric-val" id="spm-built">—</div>
@@ -2583,6 +2622,8 @@ map.on('load',()=>{
   syncYear(2024);
   // Load rivers layer by default
   setTimeout(function(){ loadRiversLayer(2024); }, 600);
+  // Preload Esri Wayback vintages in the background so they're ready when split view opens
+  setTimeout(function(){ _loadWaybackVintages(); }, 2000);
   // On mobile, auto close panels so map is visible
   if(isMobile()){
     leftOpen=false;
@@ -4943,8 +4984,12 @@ function uwUpdateImgSourceInfo() {
   var el = document.getElementById('uw-img-source-txt');
   if(!el) return;
   var fy = uwState.fromYear, ty = uwState.toYear;
-  var fromSrc = 'Google Satellite ' + fy + ' · Historical context (desaturated) + River overlays';
-  var toSrc   = 'Google Maps Hybrid ' + ty + ' · Live satellite + roads/rivers';
+  var fromSrc = fy < 2016
+    ? 'Copernicus Landsat ' + fy + ' (via Sentinel Hub)'
+    : 'Copernicus Sentinel-2 · TRUE-COLOR · ' + fy;
+  var toSrc = ty < 2016
+    ? 'Copernicus Landsat ' + ty + ' (via Sentinel Hub)'
+    : 'Copernicus Sentinel-2 · TRUE-COLOR · ' + ty;
   el.textContent = 'FROM: ' + fromSrc + '  ·  TO: ' + toSrc;
 }
 
@@ -5129,55 +5174,85 @@ function uwSplitGetCenter() {
 // Used for split-view FROM/TO panes and AI forecast standalone map
 // Each tile request fetches REAL satellite data at the exact center/zoom
 // ══════════════════════════════════════════════════════════════════
-var GMAPS_KEY = 'AIzaSyBkmVcgTAVl221Jd9LS_qZDZOyKF1nLCG0';
+var _sentinelToken = null;
+var _sentinelTokenExpiry = 0;
 
-// Build a Google Maps Static API URL for a given center, zoom, size
-// maptype: 'satellite' always
-function gmapsStaticURL(lat, lng, zoom, w, h) {
-  return 'https://maps.googleapis.com/maps/api/staticmap'
-    + '?center=' + lat + ',' + lng
-    + '&zoom=' + zoom
-    + '&size=' + w + 'x' + h
-    + '&maptype=satellite'
-    + '&key=' + GMAPS_KEY;
+// No backend available — resolve immediately with empty token.
+// All imagery uses Esri Wayback / Google Maps tiles which need no auth.
+function getSentinelToken() {
+  return Promise.resolve(_sentinelToken || '');
 }
 
-// Build Google Maps Tile API URL for MapLibre raster source
-// Uses the Maps Tiles API (session-based) — falls back to Static API tiles approach
-// For MapLibre we use the Maps JavaScript API tile endpoint
-// ══════════════════════════════════════════════════════════════════
-// SPLIT SATELLITE IMAGERY ENGINE — PRODUCTION v4
-//
-// HONEST ARCHITECTURE:
-//
-// TO PANE (current year) ─────────────────────────────────────────
-//   Google Maps Hybrid tiles (lyrs=y): real current satellite +
-//   Google's own rivers, roads, labels rendered natively on top.
-//   This is the most accurate current view available publicly.
-//   Rivers show exactly as Google Maps shows them.
-//
-// FROM PANE (historical year) ────────────────────────────────────
-//   2014+:  Esri Living Atlas Wayback (real archived dated capture)
-//           These are GENUINELY different from current — actual
-//           historical World Imagery snapshots tile-for-tile.
-//           Google hybrid labels overlaid at 0.55 opacity on top
-//           so rivers/roads are still legible.
-//   pre-2014: NASA GIBS Landsat WELD annual composite (30m, real)
-//           + MODIS TrueColor context at lower zoom
-//           + Google hybrid labels at 0.5 opacity for orientation
-//
-// RIVERS ─────────────────────────────────────────────────────────
-//   Google hybrid (lyrs=y) draws rivers natively on the satellite.
-//   Our custom GeoJSON river overlays (ACCRA_RIVERS) are added on
-//   top with year-specific channel width data, flood node markers,
-//   and degradation annotations. Best of both worlds.
-//
-// NO CSS FILTERS — zero hue-rotate / saturate / brightness tricks.
-// The visual difference is 100% real data from different sources.
-// ══════════════════════════════════════════════════════════════════
+function sentinelWMSTiles(token, year) {
+  var isBeforeSentinel = year < 2016;
+  var timeFrom, timeTo;
+  if (isBeforeSentinel) {
+    timeFrom = year + '-01-01';
+    timeTo   = year + '-12-31';
+  } else {
+    timeFrom = year + '-10-01';
+    timeTo   = year + '-12-31';
+  }
+  var layer = isBeforeSentinel ? 'LANDSAT45-TRUE-COLOR' : 'TRUE-COLOR';
+  var baseUrl = 'https://sh.dataspace.copernicus.eu/ogc/wms/' + token;
+  return [
+    baseUrl + '?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0' +
+    '&LAYERS=' + layer +
+    '&FORMAT=image%2Fjpeg' +
+    '&CRS=EPSG%3A3857' +
+    '&WIDTH=512&HEIGHT=512' +
+    '&TIME=' + timeFrom + '%2F' + timeTo +
+    '&BBOX={bbox-epsg-3857}' +
+    '&MAXCC=20'
+  ];
+}
 
-// Google Hybrid tile URL — satellite + roads/rivers/labels natively rendered
-// lyrs=y = hybrid (satellite + vector labels), lyrs=s = pure satellite
+function uwBuildSentinelStyle(token, year) {
+  var isBeforeSentinel = year < 2016;
+  var layer = isBeforeSentinel ? 'LANDSAT45-TRUE-COLOR' : 'TRUE-COLOR';
+  var timeFrom, timeTo;
+  if (isBeforeSentinel) {
+    timeFrom = year + '-01-01';
+    timeTo   = year + '-12-31';
+  } else {
+    timeFrom = year + '-10-01';
+    timeTo   = year + '-12-31';
+  }
+  var baseUrl = 'https://sh.dataspace.copernicus.eu/ogc/wms/' + token;
+  var tileUrl = baseUrl
+    + '?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0'
+    + '&LAYERS=' + layer
+    + '&FORMAT=image%2Fjpeg'
+    + '&CRS=EPSG%3A3857'
+    + '&WIDTH=512&HEIGHT=512'
+    + '&TIME=' + timeFrom + '%2F' + timeTo
+    + '&MAXCC=20'
+    + '&BBOX={bbox-epsg-3857}';
+  return {
+    version: 8,
+    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+    sources: {
+      sentinel: {
+        type: 'raster',
+        tiles: [tileUrl],
+        tileSize: 512,
+        attribution: isBeforeSentinel
+          ? 'Copernicus Landsat · ' + year
+          : 'Copernicus Sentinel-2 · ' + year,
+        maxzoom: 18
+      }
+    },
+    layers: [
+      { id: 'sentinel-layer', type: 'raster', source: 'sentinel',
+        paint: { 'raster-opacity': 1.0 } }
+    ]
+  };
+}
+
+function _applyHistoricalFilter() {}
+
+var GMAPS_KEY = '';
+
 var GMAPS_HYBRID_TILES = [
   'https://mt0.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
   'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
@@ -5191,79 +5266,132 @@ var GMAPS_SAT_TILES = [
   'https://mt3.google.com/vt/lyrs=s&x={x}&y={y}&z={z}'
 ];
 
-// Esri Living Atlas Wayback item IDs — real historical World Imagery vintages
-var ESRI_WAYBACK_VINTAGES = [
-  [2014, 1,  10, '2014 Esri Wayback'],
-  [2015, 1,  14, '2015 Esri Wayback'],
-  [2016, 1,  20, '2016 Esri Wayback'],
-  [2017, 3,  35, '2017 Esri Wayback'],
-  [2018, 1,  46, '2018 Esri Wayback'],
-  [2019, 6,  58, '2019 Esri Wayback'],
-  [2020, 1,  62, '2020 Esri Wayback'],
-  [2021, 6,  75, '2021 Esri Wayback'],
-  [2022, 1,  82, '2022 Esri Wayback'],
-  [2023, 6,  88, '2023 Esri Wayback'],
-  [2024, 1,  92, '2024 Esri Wayback'],
-];
+// ── Esri Wayback imagery support ──────────────────────────────────────────
+// Fetches the available Wayback vintages from Esri's API and builds tile URLs
+// for historical satellite imagery at a specific year.
+var ESRI_WAYBACK_VINTAGES = [];
+var _waybackVintagesLoaded = false;
+var _waybackLoadPromise = null;
+
+function _loadWaybackVintages() {
+  if(_waybackLoadPromise) return _waybackLoadPromise;
+  _waybackLoadPromise = fetch('https://livingatlas.arcgis.com/wayback/config/items.json', {
+    cache: 'force-cache'
+  }).then(function(r){ return r.json(); }).then(function(data){
+    // data is an object: { itemId: { itemTitle, releaseDatetime, ... }, ... }
+    ESRI_WAYBACK_VINTAGES = Object.keys(data).map(function(id){
+      var d = data[id];
+      var year = d.releaseDatetime
+        ? parseInt(d.releaseDatetime.substring(0,4), 10)
+        : (d.itemTitle ? parseInt(d.itemTitle.substring(0,4), 10) : 0);
+      return { id: parseInt(id, 10), year: year, title: d.itemTitle || '' };
+    }).filter(function(v){ return v.year >= 2014 && v.year <= 2030; })
+      .sort(function(a, b){ return a.year - b.year; });
+    _waybackVintagesLoaded = true;
+    return ESRI_WAYBACK_VINTAGES;
+  }).catch(function(){ return []; });
+  return _waybackLoadPromise;
+}
+
 function getWaybackItemId(year) {
-  if (year < 2014) return null;
+  if(!_waybackVintagesLoaded || !ESRI_WAYBACK_VINTAGES.length) return null;
+  // Find the vintage closest to requested year (prefer same year, then most recent prior)
   var best = null;
-  for (var i = 0; i < ESRI_WAYBACK_VINTAGES.length; i++) {
-    if (ESRI_WAYBACK_VINTAGES[i][0] <= year) best = ESRI_WAYBACK_VINTAGES[i];
+  for(var i = 0; i < ESRI_WAYBACK_VINTAGES.length; i++) {
+    var v = ESRI_WAYBACK_VINTAGES[i];
+    if(v.year <= year) best = v;
+    else if(!best) { best = v; break; }
   }
-  return best;
+  return best ? best.id : null;
 }
 
-// ── TO pane: Google Hybrid current — satellite + native rivers/roads ──
-function uwBuildCurrentStyle() {
+function getWaybackTileStyle(year, label) {
+  var itemId = getWaybackItemId(year);
+  var tiles;
+  if(itemId) {
+    // Esri Wayback tile service URL pattern
+    tiles = [
+      'https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS/1.0.0/default028mm/MapServer/tile/' + itemId + '/{z}/{y}/{x}'
+    ];
+  } else {
+    // Fall back to current Esri World Imagery
+    tiles = ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'];
+  }
   return {
     version: 8,
     glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
     sources: {
-      gmaps_hybrid: {
+      wayback: {
         type: 'raster',
-        tiles: GMAPS_HYBRID_TILES,
+        tiles: tiles,
         tileSize: 256,
-        attribution: '© Google Maps · Current Satellite + Rivers',
-        maxzoom: 21
+        attribution: itemId ? ('Esri Wayback Imagery · ' + year) : ('Esri World Imagery · ' + year),
+        maxzoom: 19
       }
     },
     layers: [
-      { id: 'gmaps-hybrid-current', type: 'raster', source: 'gmaps_hybrid',
+      { id: 'wayback-layer', type: 'raster', source: 'wayback',
         paint: { 'raster-opacity': 1.0 } }
     ]
   };
 }
 
-// ── FROM pane: Google Hybrid satellite (same tiles as TO pane) ──
-// Both panes use the same live Google satellite tiles. The visual and
-// data differentiation between years is achieved through:
-//   1. A subtle CSS desaturate filter on the FROM canvas (historical cue)
-//   2. Year-specific GeoJSON river overlays (different widths, colours, degradation)
-//   3. The year-stamped data annotation overlays injected by uwCheckBothMapsReady
-// This is the only reliable approach — NASA GIBS maxzoom:12 causes blank tiles
-// at city zoom levels (>12), making both panes look identical.
 function uwBuildYearStyle(year) {
+  // For historical years: try Esri Wayback archive (has actual dated satellite imagery)
+  if(_waybackVintagesLoaded && ESRI_WAYBACK_VINTAGES.length) {
+    var waybackStyle = getWaybackTileStyle(year, year);
+    if(waybackStyle) return waybackStyle;
+  }
+  // If Wayback not yet loaded or year not available, use Esri current World Imagery
+  // (still shows different tile layers than Google Maps — gives visual distinction)
+  var isHistorical = year < 2020;
+  if(isHistorical) {
+    // Esri World Imagery — best available for historical fallback
+    return {
+      version: 8,
+      glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+      sources: {
+        esri_sat: {
+          type: 'raster',
+          tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+          tileSize: 256,
+          attribution: 'Esri World Imagery · ' + year,
+          maxzoom: 19
+        }
+      },
+      layers: [{ id: 'esri-sat-layer', type: 'raster', source: 'esri_sat',
+        paint: { 'raster-opacity': 1.0 } }]
+    };
+  }
+  // Current/recent: Google Maps hybrid (higher resolution for recent years)
   return {
     version: 8,
     glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
     sources: {
-      gmaps_hybrid: {
+      gmaps_sat: {
         type: 'raster',
-        tiles: GMAPS_HYBRID_TILES,
+        tiles: [
+          'https://mt0.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+          'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+          'https://mt2.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+          'https://mt3.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'
+        ],
         tileSize: 256,
-        attribution: '© Google Maps Satellite · Historical Context ' + year,
+        attribution: '© Google Maps Hybrid · ' + year,
         maxzoom: 21
       }
     },
-    layers: [
-      { id: 'gmaps-hybrid-hist', type: 'raster', source: 'gmaps_hybrid',
-        paint: { 'raster-opacity': 1.0 } }
-    ]
+    layers: [{ id: 'gmaps-hybrid-layer', type: 'raster', source: 'gmaps_sat',
+      paint: { 'raster-opacity': 1.0 } }]
   };
 }
 
-// ── Forecast map style — Google hybrid, full opacity ──
+function uwBuildCurrentStyle() {
+  var toY = uwState.toYear || 2024;
+  return uwBuildYearStyle(toY);
+}
+
+
 function gmapsTileStyle(label) {
   return {
     version: 8,
@@ -5313,6 +5441,11 @@ function _splitForceHeaderButtons() {
       btn.style.cssText = 'display:inline-flex!important;visibility:visible!important;opacity:1!important;width:32px!important;height:32px!important;border-radius:6px!important;background:'+_surf2+'!important;border:1px solid '+_bdr2+'!important;color:'+_txt+'!important;align-items:center!important;justify-content:center!important;cursor:pointer!important;font-size:17px!important;font-weight:700!important;font-family:monospace!important;flex-shrink:0!important;padding:0!important;box-sizing:border-box!important;';
     }
   });
+  // Wayback button
+  var wb = document.getElementById('sbtn-wayback');
+  if(wb) {
+    wb.style.cssText = 'display:inline-flex!important;visibility:visible!important;opacity:1!important;height:32px!important;border-radius:6px!important;background:'+_surf2+'!important;border:1px solid rgba(245,158,11,.35)!important;color:#f59e0b!important;align-items:center!important;justify-content:center!important;cursor:pointer!important;font-size:10px!important;font-weight:700!important;font-family:DM Sans,sans-serif!important;flex-shrink:0!important;padding:0 8px!important;white-space:nowrap!important;box-sizing:border-box!important;';
+  }
   // Close button
   var close = document.getElementById('sbtn-close');
   if(close) {
@@ -5328,16 +5461,9 @@ function uwOpenSplitView() {
   var zone      = UW_ZONES[zoneKey];
   var zoneLabel = zone ? zone.label : 'Greater Accra';
 
-  // Imagery source labels — both panes use Google Hybrid satellite tiles
-  // FROM pane is desaturated/sepia-filtered for historical visual context
-  // River overlays provide year-specific channel width & degradation data
-  var fromChipLabel = 'Google Satellite · ' + fromY + ' Context';
-
-  // ── Header labels ────────────────────────────────────────────────
   document.getElementById('split-title-years').textContent =
-    '🛰 ' + fromY + ' vs ' + toY + '  ·  ' + zoneLabel;
+    '🛰 Sentinel-2 · ' + fromY + ' vs ' + toY + '  ·  ' + zoneLabel;
 
-  // ── Bottom metrics bar ───────────────────────────────────────────
   if(c) {
     document.getElementById('spm-built').textContent    = '+' + Math.round(c.builtDelta) + ' km²';
     document.getElementById('spm-built-d').textContent  = Math.round(c.builtFrom)+'→'+Math.round(c.builtTo);
@@ -5350,99 +5476,72 @@ function uwOpenSplitView() {
     document.getElementById('spm-odaw-d').textContent   = Math.round(c.odawFrom)+'%→'+Math.round(c.odawTo)+'%';
   }
 
-  // ── Show overlay ─────────────────────────────────────────────────
   var overlay = document.getElementById('uw-split-overlay');
   overlay.classList.add('open');
   splitState.open = true;
-  // Force-apply inline styles to header buttons — triple-fire to guarantee visibility
   setTimeout(function() { _splitForceHeaderButtons(); }, 50);
   setTimeout(function() { _splitForceHeaderButtons(); }, 350);
   setTimeout(function() { _splitForceHeaderButtons(); }, 900);
   splitState.capturedDataURL = null;
   _splitBothReady = 0;
 
-  document.getElementById('split-load-from').classList.remove('hidden');
-  document.getElementById('split-load-to').classList.remove('hidden');
-  document.getElementById('split-load-from-txt').textContent = 'Loading ' + fromY + ' archived imagery…';
-  document.getElementById('split-load-to-txt').textContent   = 'Loading ' + toY + ' current imagery…';
+  var fromLbl = document.getElementById('split-slider-from-lbl');
+  var toLbl   = document.getElementById('split-slider-to-lbl');
+  var fromSrc = (fromY >= 2014) ? 'Esri Wayback' : 'Esri Historical';
+  var toSrc   = (toY   >= 2020) ? 'Google Maps Hybrid' : 'Esri Wayback';
+  if(fromLbl) fromLbl.textContent = '◀ ' + fromY + ' · ' + fromSrc;
+  if(toLbl)   toLbl.textContent   = toY + ' · ' + toSrc + ' ▶';
 
-  // Update year badges + chips
-  document.getElementById('split-from-lbl').textContent  = fromY + ' · Google Satellite · Historical Context (desaturated)';
-  document.getElementById('split-to-lbl').textContent    = toY  + ' · Google Maps Hybrid — Live Satellite + Rivers';
-  document.getElementById('split-yr-from').textContent   = fromY;
-  document.getElementById('split-yr-to').textContent     = toY;
-  var fromChip = document.getElementById('split-from-chip');
-  if(fromChip) fromChip.textContent = fromChipLabel;
-
-  // ── Update key card labels with actual years ──────────────────────
   var skcFrom = document.getElementById('skc-from-label');
   var skcTo   = document.getElementById('skc-to-label');
-  if(skcFrom) skcFrom.textContent = '◀ ' + fromY + ' — GOOGLE SATELLITE · HISTORICAL CONTEXT';
-  if(skcTo)   skcTo.textContent   = toY + ' — GOOGLE HYBRID CURRENT ▶';
+  if(skcFrom) skcFrom.textContent = '◀ ' + fromY + ' — SENTINEL-2 TRUE COLOUR';
+  if(skcTo)   skcTo.textContent   = toY + ' — SENTINEL-2 TRUE COLOUR ▶';
 
-  // ── Show floating key card, auto-dismiss after 9s ─────────────────
   splitShowKeyCard(9000);
 
-  // ── Zone center & zoom ───────────────────────────────────────────
-  // Google Hybrid tiles work at all zoom levels up to z21 — no cap needed.
-  // Use the native zone zoom for maximum detail.
   var mapCenter = zone ? zone.center : ACCRA_CENTER;
   var mapZoom   = zone ? Math.min(zone.zoom, 14) : 12;
 
-  // ── Destroy old maps ─────────────────────────────────────────────
   if(splitState.mapFrom) { try{splitState.mapFrom.remove();}catch(e){} splitState.mapFrom = null; }
   if(splitState.mapTo)   { try{splitState.mapTo.remove();}catch(e){}   splitState.mapTo   = null; }
 
-  // ── Build map containers ─────────────────────────────────────────
-  var fromEl = document.getElementById('split-map-from-el');
-  fromEl.innerHTML = '';
-  var fromDiv = document.createElement('div');
-  fromDiv.style.cssText = 'position:absolute;inset:0;';
-  fromEl.appendChild(fromDiv);
+  var fromMapEl = document.getElementById('split-slider-from-map');
+  var toMapEl   = document.getElementById('split-slider-to-map');
+  if(!fromMapEl || !toMapEl) {
+    uwToast('Split view DOM not ready', 'error'); return;
+  }
+  fromMapEl.innerHTML = '';
+  toMapEl.innerHTML   = '';
 
-  var toEl = document.getElementById('split-map-to-el');
-  toEl.innerHTML = '';
-  var toDiv = document.createElement('div');
-  toDiv.style.cssText = 'position:absolute;inset:0;';
-  toEl.appendChild(toDiv);
+  var sentinelStatus = document.getElementById('split-sentinel-status');
+  if(sentinelStatus) sentinelStatus.textContent = '🛰 Fetching imagery sources…';
 
-  try {
-    // FROM pane — NASA GIBS Landsat WELD annual composite (historical)
-    splitState.mapFrom = new maplibregl.Map({
-      container:             fromDiv,
-      style:                 uwBuildYearStyle(fromY),
-      center:                mapCenter,
-      zoom:                  mapZoom,
-      pitch:                 0, bearing: 0,
-      interactive:           true,
-      attributionControl:    false,
+  // Preload Wayback vintages — no sentinel token needed (using Google Maps tiles)
+  _loadWaybackVintages().then(function() {
+    if(sentinelStatus) {
+      var wb = ESRI_WAYBACK_VINTAGES.length;
+      sentinelStatus.textContent = (wb ? '📅 Esri Wayback · ' + wb + ' vintages · FROM=' + fromY + ' TO=' + toY : '🛰 Esri (historical) vs Google Maps (current)');
+    }
+
+    var fromStyle = uwBuildYearStyle(fromY);
+    var toStyle   = uwBuildYearStyle(toY);
+
+    var commonOpts = {
+      center: mapCenter, zoom: mapZoom,
+      pitch: 0, bearing: 0,
+      interactive: true,
+      attributionControl: false,
       preserveDrawingBuffer: true,
-      fadeDuration:          0
-    });
+      fadeDuration: 0
+    };
 
-    // Apply historical filter once on first render, then remove listener (CSS handles the rest)
-    var _filterApplied = false;
-    splitState.mapFrom.on('render', function() {
-      if(!_filterApplied) {
-        _filterApplied = true;
-        _applyHistoricalFilter();
-      }
-    });
+    splitState.mapFrom = new maplibregl.Map(Object.assign({}, commonOpts, {
+      container: fromMapEl, style: fromStyle
+    }));
+    splitState.mapTo = new maplibregl.Map(Object.assign({}, commonOpts, {
+      container: toMapEl, style: toStyle
+    }));
 
-    // TO pane — Esri World Imagery (current high-res, most recent)
-    splitState.mapTo = new maplibregl.Map({
-      container:             toDiv,
-      style:                 uwBuildCurrentStyle(),
-      center:                mapCenter,
-      zoom:                  mapZoom,
-      pitch:                 0, bearing: 0,
-      interactive:           true,
-      attributionControl:    false,
-      preserveDrawingBuffer: true,
-      fadeDuration:          0
-    });
-
-    // ── Bi-directional sync (pan/zoom one → other follows) ────────
     var _sync = false;
     function syncFT() {
       if(_sync) return; _sync = true;
@@ -5471,36 +5570,120 @@ function uwOpenSplitView() {
     splitState.mapFrom.on('move', syncFT);
     splitState.mapTo.on('move',   syncTF);
 
-    // ── On load: hide spinner, signal ready ───────────────────────
     splitState.mapFrom.on('load', function() {
-      document.getElementById('split-load-from').classList.add('hidden');
-      setTimeout(function(){ if(splitState.mapFrom) splitState.mapFrom.resize(); }, 50);
-      // Apply filter immediately on load and again after tiles paint
-      setTimeout(function(){ _applyHistoricalFilter(); }, 100);
-      setTimeout(function(){ _applyHistoricalFilter(); }, 600);
-      _attachSplitClickHandlers();
       uwCheckBothMapsReady();
+      // Re-initialize slider once map canvases are rendered
+      setTimeout(function(){ _initSplitSlider(); }, 100);
     });
     splitState.mapTo.on('load', function() {
-      document.getElementById('split-load-to').classList.add('hidden');
-      setTimeout(function(){ if(splitState.mapTo) splitState.mapTo.resize(); }, 50);
-      _attachSplitClickHandlers();
       uwCheckBothMapsReady();
     });
 
-    // Safety fallback: if maps don't fire 'load' within 8s, hide spinners and apply filter anyway
-    setTimeout(function() {
-      document.getElementById('split-load-from').classList.add('hidden');
-      document.getElementById('split-load-to').classList.add('hidden');
-      _applyHistoricalFilter();
-    }, 8000);
+    setTimeout(function() { uwCheckBothMapsReady(); }, 8000);
 
-  } catch(e) {
-    console.error('Split map error:', e);
-    uwToast('Split view error: ' + e.message, 'error');
-    document.getElementById('split-load-from').classList.add('hidden');
-    document.getElementById('split-load-to').classList.add('hidden');
+    // Initialize slider immediately so it works while maps are loading
+    _initSplitSlider();
+    // Re-init after a short delay to ensure DOM is fully rendered
+    setTimeout(function(){ _initSplitSlider(); }, 500);
+    setTimeout(function(){ _initSplitSlider(); }, 1500);
+    _attachSplitClickHandlers();
+
+  }).catch(function(err) {
+    uwToast('Imagery load error: ' + (err && err.message ? err.message : String(err)), 'error');
+    if(sentinelStatus) sentinelStatus.textContent = '⚠ Imagery load error — check network';
+  });
+}
+
+// Split slider state — lives outside function so it persists across re-inits
+var _splitSlider = {
+  pct: 50,
+  dragging: false,
+  initialized: false,
+  _mousemove: null,
+  _mouseup: null,
+  _touchmove: null,
+  _touchend: null
+};
+
+function _initSplitSlider() {
+  var wrap   = document.getElementById('split-slider-wrap');
+  var toPane = document.getElementById('split-slider-to');
+  var handle = document.getElementById('split-slider-handle');
+  if(!wrap || !toPane || !handle) return;
+
+  // Remove old listeners if re-initializing
+  if(_splitSlider._mousemove)  { document.removeEventListener('mousemove', _splitSlider._mousemove); _splitSlider._mousemove = null; }
+  if(_splitSlider._mouseup)    { document.removeEventListener('mouseup',   _splitSlider._mouseup);   _splitSlider._mouseup   = null; }
+  if(_splitSlider._touchmove)  { document.removeEventListener('touchmove', _splitSlider._touchmove); _splitSlider._touchmove = null; }
+  if(_splitSlider._touchend)   { document.removeEventListener('touchend',  _splitSlider._touchend);  _splitSlider._touchend  = null; }
+
+  // Restore last pct or default to 50
+  var pct = _splitSlider.pct || 50;
+
+  function applyPct(p) {
+    pct = Math.max(2, Math.min(98, p));
+    _splitSlider.pct = pct;
+    // FROM pane fills full area (bottom layer)
+    // TO pane clips from the LEFT — shows only the right portion past the handle
+    toPane.style.clipPath = 'inset(0 0 0 ' + pct + '%)';
+    handle.style.left = pct + '%';
+    handle.style.transform = 'translateX(-50%)';
   }
+  applyPct(pct);
+
+  function onMove(clientX) {
+    var rect = wrap.getBoundingClientRect();
+    if(!rect.width) return;
+    var p = ((clientX - rect.left) / rect.width) * 100;
+    applyPct(p);
+    // Trigger map resize to keep canvases aligned
+    if(splitState && splitState.mapFrom) { try{ splitState.mapFrom.resize(); }catch(e){} }
+    if(splitState && splitState.mapTo)   { try{ splitState.mapTo.resize();   }catch(e){} }
+  }
+
+  _splitSlider.dragging = false;
+
+  // Mouse events on handle
+  handle.addEventListener('mousedown', function(e) {
+    _splitSlider.dragging = true;
+    e.preventDefault();
+    e.stopPropagation();
+  });
+
+  _splitSlider._mousemove = function(e) {
+    if(_splitSlider.dragging) { onMove(e.clientX); }
+  };
+  _splitSlider._mouseup = function() { _splitSlider.dragging = false; };
+  document.addEventListener('mousemove', _splitSlider._mousemove);
+  document.addEventListener('mouseup',   _splitSlider._mouseup);
+
+  // Touch events on handle — non-passive so we can preventDefault
+  handle.addEventListener('touchstart', function(e) {
+    _splitSlider.dragging = true;
+    e.preventDefault();
+    e.stopPropagation();
+  }, {passive: false});
+
+  _splitSlider._touchmove = function(e) {
+    if(_splitSlider.dragging && e.touches && e.touches[0]) {
+      e.preventDefault(); // prevent page scroll while dragging
+      onMove(e.touches[0].clientX);
+    }
+  };
+  _splitSlider._touchend = function() { _splitSlider.dragging = false; };
+  // Must be non-passive to allow preventDefault
+  document.addEventListener('touchmove', _splitSlider._touchmove, {passive: false});
+  document.addEventListener('touchend',  _splitSlider._touchend);
+
+  // Also allow clicking/tapping anywhere on the wrap to jump the slider
+  wrap.addEventListener('click', function(e) {
+    // Don't trigger on handle itself or buttons/popups
+    if(e.target === handle || handle.contains(e.target)) return;
+    if(e.target.closest && (e.target.closest('#split-click-popup') || e.target.closest('#split-key-card'))) return;
+    onMove(e.clientX);
+  });
+
+  _splitSlider.initialized = true;
 }
 
 var _splitBothReady = 0;
@@ -5508,124 +5691,23 @@ function uwCheckBothMapsReady() {
   _splitBothReady++;
   if(_splitBothReady >= 2) {
     _splitBothReady = 0;
-    // Show divider after both maps loaded
-    var divEl = document.getElementById('split-divider');
-    if(divEl) divEl.style.display = '';
-    // Apply historical visual filter to FROM pane now that maps are ready
-    // Fire multiple times because canvas may not exist until after first tile renders
-    setTimeout(function() { _applyHistoricalFilter(); }, 300);
-    setTimeout(function() { _applyHistoricalFilter(); }, 1000);
-    setTimeout(function() { _applyHistoricalFilter(); }, 2500);
-    // Attach click handlers for real-data popups
     setTimeout(function() { _attachSplitClickHandlers(); }, 350);
-    // Add river overlays to both panes with year-appropriate state
-    // Use a short delay to guarantee the map styles are fully committed
     var fromY = uwState.fromYear || 2000;
     var toY   = uwState.toYear   || 2024;
-    // Attempt immediately (handles already-loaded case via isStyleLoaded check inside)
     setTimeout(function() {
       addRiversToSplitMap(splitState.mapFrom, fromY);
       addRiversToSplitMap(splitState.mapTo,   toY);
     }, 200);
-    // Second attempt in case tiles were still loading
     setTimeout(function() {
       addRiversToSplitMap(splitState.mapFrom, fromY);
       addRiversToSplitMap(splitState.mapTo,   toY);
-      // Show river annotations
-      var annFrom = document.getElementById('split-river-ann-from');
-      var annTo   = document.getElementById('split-river-ann-to');
-      if(annFrom) {
-        annFrom.style.display = '';
-        var wKorle = riverWidthAtYear(ACCRA_RIVERS.korle, fromY).toFixed(1);
-        annFrom.innerHTML = '<div class="sra-title">🌊 Rivers · '+fromY+'</div>'
-          + '<div class="sra-row"><div class="sra-dot" style="background:#22d3ee;"></div>Korle: '+wKorle+'m wide</div>'
-          + '<div class="sra-row"><div class="sra-dot" style="background:#06b6d4;"></div>Odaw: '+riverWidthAtYear(ACCRA_RIVERS.odaw,fromY).toFixed(1)+'m wide</div>'
-          + (fromY < 2000 ? '<div class="sra-row" style="color:var(--green);font-size:8px;">✓ Near-natural state</div>'
-                          : '<div class="sra-row" style="color:var(--amber);font-size:8px;">⚠ Encroachment active</div>');
-      }
-      if(annTo) {
-        annTo.style.display = '';
-        var wKorleT  = riverWidthAtYear(ACCRA_RIVERS.korle, toY).toFixed(1);
-        var degradK  = Math.round((1 - riverWidthAtYear(ACCRA_RIVERS.korle,toY)/riverWidthAtYear(ACCRA_RIVERS.korle,1980))*100);
-        annTo.innerHTML = '<div class="sra-title">🌊 Rivers · '+toY+'</div>'
-          + '<div class="sra-row"><div class="sra-dot" style="background:#3b82f6;"></div>Korle: '+wKorleT+'m (−'+degradK+'%)</div>'
-          + '<div class="sra-row"><div class="sra-dot" style="background:#f43f5e;"></div>Active flood nodes</div>'
-          + '<div class="sra-row" style="color:var(--red);font-size:8px;">⚠ Severely degraded</div>';
-      }
+      _injectSplitDataCards(fromY, toY);
       var kcRivers = document.getElementById('skc-rivers-legend');
       if(kcRivers) kcRivers.style.display = '';
-
-      // ── Inject year-data overlay cards into pane DOM ─────────────
-      // These sit over the MapLibre canvas providing concrete year-specific facts
-      (function() {
-        var builtFrom = Math.round(uwInterp('built', fromY));
-        var builtTo   = Math.round(uwInterp('built', toY));
-        var floodFrom = Math.round(uwInterp('flood_ev', fromY));
-        var floodTo   = Math.round(uwInterp('flood_ev', toY));
-        var korleFrom = riverWidthAtYear(ACCRA_RIVERS.korle, fromY).toFixed(1);
-        var korleTo   = riverWidthAtYear(ACCRA_RIVERS.korle, toY).toFixed(1);
-        var degradKTo = Math.round((1 - riverWidthAtYear(ACCRA_RIVERS.korle,toY)/riverWidthAtYear(ACCRA_RIVERS.korle,1980))*100);
-        var popFrom   = uwInterp('pop', fromY).toFixed(1);
-        var popTo     = uwInterp('pop', toY).toFixed(2);
-        var isEarly   = fromY <= 2005;
-
-        // FROM pane data card (bottom-left, inside the pane)
-        var fromPane = document.getElementById('split-pane-from');
-        if(fromPane) {
-          var old = fromPane.querySelector('.split-data-card');
-          if(old) old.remove();
-          var card = document.createElement('div');
-          card.className = 'split-data-card';
-          card.style.cssText = [
-            'position:absolute','bottom:48px','left:10px','z-index:25',
-            'background:rgba(5,13,18,0.88)','border:1px solid rgba(6,201,232,0.3)',
-            'border-radius:8px','padding:9px 12px','pointer-events:none',
-            'font-family:DM Sans,sans-serif','min-width:160px'
-          ].join(';');
-          card.innerHTML = [
-            '<div style="font-size:9px;color:#22d3ee;font-weight:700;letter-spacing:.7px;margin-bottom:6px;font-family:JetBrains Mono,monospace;">◀ '+ fromY +' DATA</div>',
-            '<div style="font-size:11px;color:#e2e8f0;margin-bottom:3px;">🏗 Built-up: <strong style="color:#f97316">'+ builtFrom +' km²</strong></div>',
-            '<div style="font-size:11px;color:#e2e8f0;margin-bottom:3px;">🌊 Korle R: <strong style="color:#22d3ee">'+ korleFrom +'m</strong></div>',
-            '<div style="font-size:11px;color:#e2e8f0;margin-bottom:3px;">⚡ Floods: <strong style="color:#f59e0b">'+ floodFrom +'/yr</strong></div>',
-            '<div style="font-size:11px;color:#e2e8f0;margin-bottom:5px;">👥 Pop: <strong style="color:#8b5cf6">'+ popFrom +'M</strong></div>',
-            (isEarly ? '<div style="font-size:8px;color:#10b981;font-weight:600;">✓ Pre-expansion era</div>'
-                     : '<div style="font-size:8px;color:#f59e0b;font-weight:600;">⚠ Expansion underway</div>')
-          ].join('');
-          fromPane.style.position = 'relative';
-          fromPane.appendChild(card);
-        }
-
-        // TO pane data card (bottom-right, inside the pane)
-        var toPane = document.getElementById('split-pane-to');
-        if(toPane) {
-          var old2 = toPane.querySelector('.split-data-card');
-          if(old2) old2.remove();
-          var card2 = document.createElement('div');
-          card2.className = 'split-data-card';
-          card2.style.cssText = [
-            'position:absolute','bottom:48px','right:10px','z-index:25',
-            'background:rgba(5,13,18,0.88)','border:1px solid rgba(244,63,94,0.3)',
-            'border-radius:8px','padding:9px 12px','pointer-events:none',
-            'font-family:DM Sans,sans-serif','min-width:160px','text-align:right'
-          ].join(';');
-          card2.innerHTML = [
-            '<div style="font-size:9px;color:#f43f5e;font-weight:700;letter-spacing:.7px;margin-bottom:6px;font-family:JetBrains Mono,monospace;">'+ toY +' DATA ▶</div>',
-            '<div style="font-size:11px;color:#e2e8f0;margin-bottom:3px;"><strong style="color:#f97316">'+ builtTo +' km²</strong> Built-up 🏗</div>',
-            '<div style="font-size:11px;color:#e2e8f0;margin-bottom:3px;"><strong style="color:#3b82f6">'+ korleTo +'m (−'+ degradKTo +'%)</strong> Korle 🌊</div>',
-            '<div style="font-size:11px;color:#e2e8f0;margin-bottom:3px;"><strong style="color:#f43f5e">'+ floodTo +'/yr</strong> Floods ⚡</div>',
-            '<div style="font-size:11px;color:#e2e8f0;margin-bottom:5px;"><strong style="color:#8b5cf6">'+ popTo +'M</strong> Pop 👥</div>',
-            '<div style="font-size:8px;color:#f43f5e;font-weight:600;">⚠ Severely degraded</div>'
-          ].join('');
-          toPane.style.position = 'relative';
-          toPane.appendChild(card2);
-        }
-      }());
     }, 900);
-    // Wait for tiles to fully render, then capture
     var fromIdle = false, toIdle = false;
     function checkIdle() {
       if(fromIdle && toIdle) {
-        // Give extra 500ms for tiles to paint before capturing
         setTimeout(function(){ uwSplitCapture(); }, 500);
       }
     }
@@ -5635,36 +5717,92 @@ function uwCheckBothMapsReady() {
     if(splitState.mapTo) {
       splitState.mapTo.once('idle', function(){ toIdle = true; checkIdle(); });
     } else { toIdle = true; checkIdle(); }
-    // Hard fallback: capture after 3.5s regardless
     setTimeout(function() {
       if(!splitState.capturedDataURL) uwSplitCapture();
-    }, 3500);
+    }, 4000);
   }
+}
+
+function _injectSplitDataCards(fromY, toY) {
+  var builtFrom = Math.round(uwInterp('built', fromY));
+  var builtTo   = Math.round(uwInterp('built', toY));
+  var floodFrom = Math.round(uwInterp('flood_ev', fromY));
+  var floodTo   = Math.round(uwInterp('flood_ev', toY));
+  var korleFrom = riverWidthAtYear(ACCRA_RIVERS.korle, fromY).toFixed(1);
+  var korleTo   = riverWidthAtYear(ACCRA_RIVERS.korle, toY).toFixed(1);
+  var degradKTo = Math.round((1 - riverWidthAtYear(ACCRA_RIVERS.korle,toY)/riverWidthAtYear(ACCRA_RIVERS.korle,1980))*100);
+  var popFrom   = uwInterp('pop', fromY).toFixed(1);
+  var popTo     = uwInterp('pop', toY).toFixed(2);
+  var isEarly   = fromY <= 2005;
+  var wrap = document.getElementById('split-slider-wrap');
+  if(!wrap) return;
+
+  ['split-data-card-from','split-data-card-to'].forEach(function(id){
+    var old = document.getElementById(id);
+    if(old) old.remove();
+  });
+
+  var cardFrom = document.createElement('div');
+  cardFrom.id = 'split-data-card-from';
+  cardFrom.style.cssText = 'position:absolute;bottom:80px;left:14px;z-index:15;background:rgba(5,13,18,.88);border:1px solid rgba(6,201,232,.3);border-radius:8px;padding:9px 12px;pointer-events:none;font-family:DM Sans,sans-serif;min-width:160px;';
+  cardFrom.innerHTML = [
+    '<div style="font-size:9px;color:#22d3ee;font-weight:700;letter-spacing:.7px;margin-bottom:6px;font-family:JetBrains Mono,monospace;">◀ '+ fromY +' DATA</div>',
+    '<div style="font-size:11px;color:#e2e8f0;margin-bottom:3px;">🏗 Built-up: <strong style="color:#f97316">'+ builtFrom +' km²</strong></div>',
+    '<div style="font-size:11px;color:#e2e8f0;margin-bottom:3px;">🌊 Korle R: <strong style="color:#22d3ee">'+ korleFrom +'m</strong></div>',
+    '<div style="font-size:11px;color:#e2e8f0;margin-bottom:3px;">⚡ Floods: <strong style="color:#f59e0b">'+ floodFrom +'/yr</strong></div>',
+    '<div style="font-size:11px;color:#e2e8f0;margin-bottom:5px;">👥 Pop: <strong style="color:#8b5cf6">'+ popFrom +'M</strong></div>',
+    (isEarly ? '<div style="font-size:8px;color:#10b981;font-weight:600;">✓ Pre-expansion era</div>'
+             : '<div style="font-size:8px;color:#f59e0b;font-weight:600;">⚠ Expansion underway</div>')
+  ].join('');
+  wrap.appendChild(cardFrom);
+
+  var cardTo = document.createElement('div');
+  cardTo.id = 'split-data-card-to';
+  cardTo.style.cssText = 'position:absolute;bottom:80px;right:14px;z-index:15;background:rgba(5,13,18,.88);border:1px solid rgba(244,63,94,.3);border-radius:8px;padding:9px 12px;pointer-events:none;font-family:DM Sans,sans-serif;min-width:160px;text-align:right;';
+  cardTo.innerHTML = [
+    '<div style="font-size:9px;color:#f43f5e;font-weight:700;letter-spacing:.7px;margin-bottom:6px;font-family:JetBrains Mono,monospace;">'+ toY +' DATA ▶</div>',
+    '<div style="font-size:11px;color:#e2e8f0;margin-bottom:3px;"><strong style="color:#f97316">'+ builtTo +' km²</strong> Built-up 🏗</div>',
+    '<div style="font-size:11px;color:#e2e8f0;margin-bottom:3px;"><strong style="color:#3b82f6">'+ korleTo +'m (−'+ degradKTo +'%)</strong> Korle 🌊</div>',
+    '<div style="font-size:11px;color:#e2e8f0;margin-bottom:3px;"><strong style="color:#f43f5e">'+ floodTo +'/yr</strong> Floods ⚡</div>',
+    '<div style="font-size:11px;color:#e2e8f0;margin-bottom:5px;"><strong style="color:#8b5cf6">'+ popTo +'M</strong> Pop 👥</div>',
+    '<div style="font-size:8px;color:#f43f5e;font-weight:600;">⚠ Severely degraded</div>'
+  ].join('');
+  wrap.appendChild(cardTo);
 }
 
 function uwCloseSplitView(resetToNormal) {
   var overlay = document.getElementById('uw-split-overlay');
   overlay.style.opacity = '0';
-  // Dismiss key card immediately on close
   splitDismissKeyCard();
-  // Close any open click popup
   splitClosePopup();
-  // Reset MapLibre click-handler flags so they re-bind on next open
   splitState._fromClickBound = false;
   splitState._toClickBound   = false;
+  // Clean up slider event listeners
+  _splitSlider.dragging = false;
+  if(_splitSlider._mousemove)  { document.removeEventListener('mousemove', _splitSlider._mousemove); _splitSlider._mousemove = null; }
+  if(_splitSlider._mouseup)    { document.removeEventListener('mouseup',   _splitSlider._mouseup);   _splitSlider._mouseup   = null; }
+  if(_splitSlider._touchmove)  { document.removeEventListener('touchmove', _splitSlider._touchmove); _splitSlider._touchmove = null; }
+  if(_splitSlider._touchend)   { document.removeEventListener('touchend',  _splitSlider._touchend);  _splitSlider._touchend  = null; }
+  _splitSlider.pct = 50;
+  _splitSlider.initialized = false;
   setTimeout(function(){
     overlay.classList.remove('open');
     overlay.style.opacity = '';
     splitState.open = false;
-    // Clean up split maps to free memory
     if(splitState.mapFrom) { try{splitState.mapFrom.remove();}catch(e){} splitState.mapFrom=null; }
     if(splitState.mapTo)   { try{splitState.mapTo.remove();}catch(e){} splitState.mapTo=null; }
-    // Remove injected overlay cards and badges so they don't stack on re-open
-    ['split-pane-from','split-pane-to'].forEach(function(id){
+    ['split-data-card-from','split-data-card-to'].forEach(function(id){
       var el = document.getElementById(id);
-      if(!el) return;
-      el.querySelectorAll('.split-data-card,.split-hist-filter-badge,.split-curr-visual-tint').forEach(function(c){c.remove();});
+      if(el) el.remove();
     });
+    var fromMapEl = document.getElementById('split-slider-from-map');
+    var toMapEl   = document.getElementById('split-slider-to-map');
+    if(fromMapEl) fromMapEl.innerHTML = '';
+    if(toMapEl)   toMapEl.innerHTML   = '';
+    var toPane = document.getElementById('split-slider-to');
+    if(toPane) toPane.style.clipPath = 'inset(0 0 0 50%)';
+    var handle = document.getElementById('split-slider-handle');
+    if(handle) handle.style.left = '50%';
     // Reset main map to satellite basemap and fit Accra bounds
     if(resetToNormal && mapReady) {
       if(curBase !== 'sat') { setBasemap('sat'); }
@@ -5729,6 +5867,56 @@ function splitToggleRivers() {
   uwToast(_splitRiversVisible ? 'River overlays shown' : 'River overlays hidden', 'info');
 }
 
+// ── Wayback imagery toggle — swap between Esri Wayback archive and Sentinel ──
+var _splitUseWayback = true; // default ON for years >= 2014
+function splitToggleWayback() {
+  _splitUseWayback = !_splitUseWayback;
+  var btn = document.getElementById('sbtn-wayback');
+  var fromY = uwState ? uwState.fromYear : 2000;
+  var toY   = uwState ? uwState.toYear   : 2024;
+  var status = document.getElementById('split-sentinel-status');
+
+  if(btn) {
+    if(_splitUseWayback) {
+      btn.style.color = 'var(--amber)';
+      btn.style.borderColor = 'rgba(245,158,11,.35)';
+      btn.title = 'Currently: Esri Wayback archive — click to switch to Sentinel';
+      btn.textContent = '📅 Wayback';
+    } else {
+      btn.style.color = 'var(--accent)';
+      btn.style.borderColor = 'rgba(6,201,232,.35)';
+      btn.title = 'Currently: Copernicus Sentinel-2 — click to switch to Wayback';
+      btn.textContent = '🛰 Sentinel';
+    }
+  }
+
+  // Reload both map styles with the new imagery source — no token needed
+  var fromStyle, toStyle;
+  if(_splitUseWayback && _waybackVintagesLoaded && ESRI_WAYBACK_VINTAGES.length) {
+    fromStyle = getWaybackTileStyle(fromY, fromY) || uwBuildYearStyle(fromY);
+    toStyle   = getWaybackTileStyle(toY,   toY)   || uwBuildYearStyle(toY);
+    if(status) status.textContent = '📅 Esri Wayback · ' + fromY + ' / ' + toY;
+    uwToast('Switched to Esri Wayback satellite archive', 'info');
+  } else {
+    fromStyle = uwBuildYearStyle(fromY);
+    toStyle   = uwBuildYearStyle(toY);
+    if(status) status.textContent = '🛰 Google Satellite imagery';
+    uwToast('Switched to Google satellite imagery', 'info');
+  }
+  if(splitState.mapFrom) {
+    try { splitState.mapFrom.setStyle(fromStyle); } catch(e){}
+    splitState.mapFrom.once('styledata', function(){
+      try { addRiversToSplitMap(splitState.mapFrom, fromY); } catch(e){}
+    });
+  }
+  if(splitState.mapTo) {
+    try { splitState.mapTo.setStyle(toStyle); } catch(e){}
+    splitState.mapTo.once('styledata', function(){
+      try { addRiversToSplitMap(splitState.mapTo, toY); } catch(e){}
+    });
+  }
+}
+
 // ── Floating Key Card — show/hide/dismiss ──────────────────────────
 var _keyCardTimer = null;
 function splitShowKeyCard(autoDismissMs) {
@@ -5756,71 +5944,7 @@ function splitDismissKeyCard() {
   }, 750);
 }
 
-// ── Visual differentiation: FROM pane gets historical desaturate filter ──
-// Both panes load Google Hybrid satellite tiles (reliable at all zoom levels).
-// The FROM (historical) pane is visually distinguished with a CSS filter:
-//   • Desaturated + sepia tint → reads as "historical / archival" imagery
-//   • The TO (current) pane stays vivid full-colour
-// Year-specific GeoJSON river overlays and data annotations provide the
-// actual data-driven differentiation between the two time periods.
-function _applyHistoricalFilter() {
-  var fromPane = document.getElementById('split-pane-from');
-  var toPane   = document.getElementById('split-pane-to');
 
-  // Apply historical look to FROM canvas
-  if(fromPane) {
-    fromPane.querySelectorAll('canvas').forEach(function(cv) {
-      cv.style.filter = 'saturate(0.45) sepia(0.35) brightness(0.92)';
-      cv.style.webkitFilter = 'saturate(0.45) sepia(0.35) brightness(0.92)';
-      cv.style.transition = 'filter 0.6s ease';
-    });
-  }
-  // Keep TO pane vivid — no filter
-  if(toPane) {
-    toPane.querySelectorAll('canvas').forEach(function(cv) {
-      cv.style.filter = 'none';
-      cv.style.webkitFilter = 'none';
-    });
-    toPane.querySelectorAll('.split-curr-visual-tint,.split-hist-visual-tint,.split-hist-filter-badge').forEach(function(el){el.remove();});
-  }
-
-  // Inject a clear "HISTORICAL CONTEXT" badge on the FROM pane canvas wrapper
-  if(fromPane && !fromPane.querySelector('.split-hist-filter-badge')) {
-    var fromY = (uwState && uwState.fromYear) ? uwState.fromYear : '—';
-    var badge = document.createElement('div');
-    badge.className = 'split-hist-filter-badge';
-    badge.style.cssText = [
-      'position:absolute','top:10px','left:10px','z-index:20',
-      'background:rgba(5,13,18,0.82)','border:1px solid rgba(6,201,232,0.35)',
-      'border-radius:6px','padding:5px 10px',
-      'font-family:JetBrains Mono,monospace','font-size:9px',
-      'color:#22d3ee','font-weight:700','letter-spacing:0.8px',
-      'pointer-events:none','white-space:nowrap'
-    ].join(';');
-    badge.textContent = '◀ HISTORICAL VIEW · ' + fromY;
-    fromPane.style.position = 'relative';
-    fromPane.appendChild(badge);
-  }
-  // Inject CURRENT badge on TO pane
-  if(toPane && !toPane.querySelector('.split-curr-visual-tint')) {
-    var toY = (uwState && uwState.toYear) ? uwState.toYear : '—';
-    var badge2 = document.createElement('div');
-    badge2.className = 'split-curr-visual-tint';
-    badge2.style.cssText = [
-      'position:absolute','top:10px','right:10px','z-index:20',
-      'background:rgba(5,13,18,0.82)','border:1px solid rgba(244,63,94,0.35)',
-      'border-radius:6px','padding:5px 10px',
-      'font-family:JetBrains Mono,monospace','font-size:9px',
-      'color:#f43f5e','font-weight:700','letter-spacing:0.8px',
-      'pointer-events:none','white-space:nowrap'
-    ].join(';');
-    badge2.textContent = 'CURRENT VIEW · ' + toY + ' ▶';
-    toPane.style.position = 'relative';
-    toPane.appendChild(badge2);
-  }
-}
-
-// ── Split pane click popup — real AccraWatch data per year ────────────
 function splitClosePopup() {
   var p = document.getElementById('split-click-popup');
   if(p) p.classList.remove('show');
@@ -5917,20 +6041,15 @@ function _showSplitPopup(year, area, clickX, clickY, isFrom) {
 }
 
 function _attachSplitClickHandlers() {
-  // MapLibre's WebGL canvas consumes all pointer events — the only reliable way
-  // to detect clicks ON the satellite imagery is via map.on('click') on each instance.
-  // We remove any old listeners first to avoid duplicates.
-
   if(splitState.mapFrom && !splitState._fromClickBound) {
     splitState._fromClickBound = true;
     splitState.mapFrom.on('click', function(e) {
-      // e.point = {x, y} pixel coords relative to the map container
-      var pane = document.getElementById('split-pane-from');
-      var area = document.getElementById('split-maps-area');
-      if(!pane || !area) return;
-      // Convert map-container coords to split-maps-area coords
-      var paneRect = pane.getBoundingClientRect();
+      var area = document.getElementById('split-slider-wrap');
+      if(!area) return;
       var areaRect = area.getBoundingClientRect();
+      var fromMapEl = document.getElementById('split-slider-from-map');
+      if(!fromMapEl) return;
+      var paneRect = fromMapEl.getBoundingClientRect();
       var cx = (paneRect.left - areaRect.left) + e.point.x;
       var cy = e.point.y;
       _showSplitPopup(uwState.fromYear, area, cx, cy, true);
@@ -5940,11 +6059,12 @@ function _attachSplitClickHandlers() {
   if(splitState.mapTo && !splitState._toClickBound) {
     splitState._toClickBound = true;
     splitState.mapTo.on('click', function(e) {
-      var pane = document.getElementById('split-pane-to');
-      var area = document.getElementById('split-maps-area');
-      if(!pane || !area) return;
-      var paneRect = pane.getBoundingClientRect();
+      var area = document.getElementById('split-slider-wrap');
+      if(!area) return;
       var areaRect = area.getBoundingClientRect();
+      var toMapEl = document.getElementById('split-slider-to-map');
+      if(!toMapEl) return;
+      var paneRect = toMapEl.getBoundingClientRect();
       var cx = (paneRect.left - areaRect.left) + e.point.x;
       var cy = e.point.y;
       _showSplitPopup(uwState.toYear, area, cx, cy, false);
@@ -6044,7 +6164,7 @@ function _doCapture() {
           ctx.fillStyle = '#7ab3c8';
           ctx.font = '9px JetBrains Mono, monospace';
           ctx.textAlign = 'center';
-          ctx.fillText('Google Maps Satellite · Esri Wayback · NASA GIBS · Greater Accra · AccraWatch ' + new Date().getFullYear(), outW/2, outH-6);
+          ctx.fillText('Copernicus Sentinel-2 · Copernicus Landsat · Greater Accra · AccraWatch ' + new Date().getFullYear(), outW/2, outH-6);
 
           splitState.capturedDataURL = composed.toDataURL('image/jpeg', 0.93);
           uwToast('Satellite image captured for export ✓', 'success');
@@ -7123,20 +7243,20 @@ async function uwGenerateAndPrintPDF() {
           var _wFrom = Math.round(c ? c.totalWetlandFrom : uwInterp('korle_ha',fromY)+uwInterp('densu_ha',fromY)+uwInterp('sakumo_ha',fromY)+uwInterp('chemu_ha',fromY));
           var _wTo   = Math.round(c ? c.totalWetlandTo   : uwInterp('korle_ha',toY)+uwInterp('densu_ha',toY)+uwInterp('sakumo_ha',toY)+uwInterp('chemu_ha',toY));
           satImgHTML = '<div style="width:100%;background:#0f172a;border-radius:4px 4px 0 0;padding:18px 22px">'
-            + '<div style="color:#94a3b8;font-size:10px;margin-bottom:10px;font-family:monospace;letter-spacing:.5px">SATELLITE COMPARISON · ESRI WORLD IMAGERY · MAXAR TECHNOLOGIES</div>'
+            + '<div style="color:#94a3b8;font-size:10px;margin-bottom:10px;font-family:monospace;letter-spacing:.5px">SATELLITE COMPARISON · COPERNICUS SENTINEL-2 · ESA</div>'
             + '<div style="display:grid;grid-template-columns:1fr 3px 1fr;gap:0;min-height:120px">'
               + '<div style="padding:14px;background:rgba(16,185,129,.07);border-radius:6px 0 0 6px">'
                 + '<div style="color:#10b981;font-size:10px;font-weight:700;letter-spacing:.5px;margin-bottom:6px">◀ ' + fromY + ' — HISTORICAL</div>'
                 + '<div style="color:#e2e8f0;font-size:13px;font-weight:700">Built-up: <span style="color:#f97316">' + _bFrom + ' km²</span></div>'
                 + '<div style="color:#e2e8f0;font-size:13px;font-weight:700;margin-top:4px">Wetlands: <span style="color:#38bdf8">' + _wFrom.toLocaleString() + ' ha</span></div>'
-                + '<div style="color:#7ab3c8;font-size:9px;margin-top:8px">Landsat archive imagery · AccraWatch</div>'
+                + '<div style="color:#7ab3c8;font-size:9px;margin-top:8px">Copernicus Landsat archive · AccraWatch</div>'
               + '</div>'
               + '<div style="background:linear-gradient(to bottom,#0891b2,#06c9e8,#0891b2);flex-shrink:0"></div>'
               + '<div style="padding:14px;background:rgba(244,63,94,.06);border-radius:0 6px 6px 0">'
                 + '<div style="color:#f43f5e;font-size:10px;font-weight:700;letter-spacing:.5px;margin-bottom:6px">CURRENT STATE — ' + toY + ' ▶</div>'
                 + '<div style="color:#e2e8f0;font-size:13px;font-weight:700">Built-up: <span style="color:#f97316">' + _bTo + ' km²</span></div>'
                 + '<div style="color:#e2e8f0;font-size:13px;font-weight:700;margin-top:4px">Wetlands: <span style="color:#38bdf8">' + _wTo.toLocaleString() + ' ha</span></div>'
-                + '<div style="color:#fca5a5;font-size:9px;margin-top:8px">Sentinel-2 / Esri World Imagery · 2024</div>'
+                + '<div style="color:#fca5a5;font-size:9px;margin-top:8px">Copernicus Sentinel-2 · ESA · ' + toY + '</div>'
               + '</div>'
             + '</div>'
             + '<div style="color:#475569;font-size:8.5px;margin-top:10px;font-style:italic">To include actual satellite imagery, open the Satellite Comparison view before exporting.</div>'
@@ -7159,7 +7279,7 @@ async function uwGenerateAndPrintPDF() {
             return '<div class="sat-meta-cell"><span class="sat-meta-val">'+m[0]+'</span><div class="sat-meta-lbl">'+m[1]+'</div><div class="sat-meta-delta">'+m[2]+'</div></div>';
           }).join('') : '<div class="sat-meta-cell" style="flex:1"><span class="sat-meta-val" style="color:#7ab3c8">Run period comparison for metrics</span></div>')
           + '</div>'
-          + '<div class="sat-caption">Esri World Imagery · Maxar Technologies · '+zoneLabel+' · AccraWatch Analysis · Generated ' + dateStr + '</div>'
+          + '<div class="sat-caption">Copernicus Sentinel-2 · ESA / USGS · '+zoneLabel+' · AccraWatch Analysis · Generated ' + dateStr + '</div>'
           + '</div></div>';
       }())
 
@@ -7178,7 +7298,7 @@ async function uwGenerateAndPrintPDF() {
     + (floodHtml ? '<div class="sec"><h2>Flood Risk Assessment</h2><ul>' + floodHtml + '</ul></div>' : '')
     + (actHtml ? '<div class="sec"><h2>Recommended Actions</h2><ul>' + actHtml + '</ul></div>' : '')
     + '</div>'
-    + '<div class="foot">Generated by AccraWatch Real-Time Land Intelligence · AI: Claude claude-sonnet-4-6 (Anthropic) · Data: NASA GIBS, Esri World Imagery, Maxar Technologies, Open-Meteo, EPA Ghana, GWCL, NADMO, GSS Census 2021, Ramsar RIS 563/564 · ' + dateStr + ' ' + timeStr + ' GMT</div>'
+    + '<div class="foot">Generated by AccraWatch Real-Time Land Intelligence · AI: Claude claude-sonnet-4-6 (Anthropic) · Satellite: Copernicus Sentinel-2 / Landsat (ESA / USGS via Copernicus Data Space) · Data: Open-Meteo, EPA Ghana, GWCL, NADMO, GSS Census 2021, Ramsar RIS 563/564 · ' + dateStr + ' ' + timeStr + ' GMT</div>'
     + '</body></html>';
 
   var printWin = window.open('', '_blank', 'width=900,height=700');

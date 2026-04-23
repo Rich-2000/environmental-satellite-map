@@ -2690,12 +2690,12 @@ function initLayers(){
 
   // True-color: init at current year's April composite (syncYear will update it)
   const _initTCDate=getNASATileDate(curYear,'tc');
-  map.addSource('nasa-tc',{type:'raster',tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${_initTCDate}/GoogleMapsCompatible/{z}/{y}/{x}.jpg`],tileSize:256,attribution:'NASA GIBS',maxzoom:9});
+  map.addSource('nasa-tc',{type:'raster',tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${_initTCDate}/GoogleMapsCompatible/{z}/{y}/{x}.jpg`],tileSize:256,attribution:'NASA GIBS',maxzoom:9,minzoom:1});
   map.addLayer({id:'nasa-tc-lyr',type:'raster',source:'nasa-tc',paint:{'raster-opacity':LS.satellite?0.55:0}});
 
   // NDVI: compute the latest available 8-day composite date dynamically
   const _initNDVIDate=getNASATileDate(curYear,'ndvi');
-  map.addSource('nasa-ndvi',{type:'raster',tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_NDVI_8Day/default/${_initNDVIDate}/GoogleMapsCompatible/{z}/{y}/{x}.png`],tileSize:256,attribution:'NASA GIBS NDVI',maxzoom:9});
+  map.addSource('nasa-ndvi',{type:'raster',tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_NDVI_8Day/default/${_initNDVIDate}/GoogleMapsCompatible/{z}/{y}/{x}.png`],tileSize:256,attribution:'NASA GIBS NDVI',maxzoom:9,minzoom:1});
   map.addLayer({id:'ndvi-lyr',type:'raster',source:'nasa-ndvi',paint:{'raster-opacity':LS.ndvi?0.8:0}});
 
   addGeojsonLayers('urban',URBAN_ZONES.map(z=>({type:'Feature',properties:{n:z.n,era:z.era,sev:z.sev},geometry:{type:'Polygon',coordinates:[z.c]}})));
@@ -2868,7 +2868,7 @@ function syncYear(y,skipTiles=false){
     if(map.getSource('nasa-tc'))map.removeSource('nasa-tc');
     map.addSource('nasa-tc',{type:'raster',
       tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${tileDate}/GoogleMapsCompatible/{z}/{y}/{x}.jpg`],
-      tileSize:256,attribution:'NASA GIBS',maxzoom:9
+      tileSize:256,attribution:'NASA GIBS',maxzoom:9,minzoom:1
     });
     map.addLayer({id:'nasa-tc-lyr',type:'raster',source:'nasa-tc',paint:{'raster-opacity':LS.satellite?0.55:0}});
 
@@ -2878,7 +2878,7 @@ function syncYear(y,skipTiles=false){
     if(map.getSource('nasa-ndvi'))map.removeSource('nasa-ndvi');
     map.addSource('nasa-ndvi',{type:'raster',
       tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_NDVI_8Day/default/${ndviDate}/GoogleMapsCompatible/{z}/{y}/{x}.png`],
-      tileSize:256,attribution:'NASA GIBS NDVI',maxzoom:9
+      tileSize:256,attribution:'NASA GIBS NDVI',maxzoom:9,minzoom:1
     });
     map.addLayer({id:'ndvi-lyr',type:'raster',source:'nasa-ndvi',paint:{'raster-opacity':LS.ndvi?0.8:0}});
   }
@@ -3258,7 +3258,7 @@ async function loadAlerts(){
   // ── SOURCE 4: Live GloFAS river discharge — Odaw/Densu flood risk ──────
   try{
     // GloFAS v4 API — Odaw River at Accra (5.556°N, -0.221°E)
-    const gfr=await fetch('https://api.open-meteo.com/v1/flood?latitude=5.556&longitude=-0.221&daily=river_discharge,river_discharge_mean,river_discharge_max&forecast_days=7&past_days=7&models=seamless',{signal:AbortSignal.timeout(8000)});
+    const gfr=await fetch('https://flood-api.open-meteo.com/v1/flood?latitude=5.556&longitude=-0.221&daily=river_discharge,river_discharge_mean,river_discharge_max&forecast_days=7&past_days=7',{signal:AbortSignal.timeout(8000)});
     if(!gfr.ok)throw new Error();
     const gfd=await gfr.json();
     const discharge=gfd.daily?.river_discharge||[];
@@ -3294,7 +3294,7 @@ async function loadAlerts(){
     const liveRain=document.getElementById('s-rain')?.textContent||'—';
     const today=new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
 
-    const alertRes=await fetch('https://api.anthropic.com/v1/messages',{
+    const alertRes=await fetch('/api/claude-proxy',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
@@ -3519,7 +3519,7 @@ Respond ONLY with valid JSON — no markdown, no explanation outside JSON:
 }`;
 
   try{
-    const res=await fetch('https://api.anthropic.com/v1/messages',{
+    const res=await fetch('/api/claude-proxy',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
@@ -5179,75 +5179,172 @@ function uwSplitGetCenter() {
 // ══════════════════════════════════════════════════════════════════
 var _sentinelToken = null;
 var _sentinelTokenExpiry = 0;
+var _sentinelTokenPromise = null;
 
-// No backend required — resolves immediately with empty token.
-// All imagery uses Esri Wayback / Google Maps tiles which need no auth.
-// When a real Sentinel token is available it can be set via _sentinelToken directly.
+/**
+ * Fetches a Copernicus Sentinel Hub OAuth2 token from our Vercel backend.
+ * Caches the token until 60 s before expiry. Returns '' on failure so
+ * callers can gracefully fall back to Esri tiles.
+ */
 function getSentinelToken() {
-  return Promise.resolve(_sentinelToken || '/api/sentinel-token');
+  var now = Date.now();
+  // Return cached token if still valid (with 60 s buffer)
+  if (_sentinelToken && _sentinelTokenExpiry > now + 60000) {
+    return Promise.resolve(_sentinelToken);
+  }
+  // Deduplicate concurrent requests
+  if (_sentinelTokenPromise) return _sentinelTokenPromise;
+
+  _sentinelTokenPromise = fetch('/api/sentinel-token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' }
+  })
+    .then(function(r) {
+      if (!r.ok) throw new Error('sentinel-token HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      if (data && data.access_token) {
+        _sentinelToken = data.access_token;
+        // expires_in is in seconds; store as ms timestamp with 60 s buffer
+        var expiresIn = (data.expires_in || 600) - 60;
+        _sentinelTokenExpiry = Date.now() + expiresIn * 1000;
+        console.log('[Sentinel] token acquired, valid for', expiresIn, 's');
+      }
+      return _sentinelToken || '';
+    })
+    .catch(function(err) {
+      console.warn('[Sentinel] token fetch failed — will use Esri fallback:', err.message);
+      return '';
+    })
+    .finally(function() {
+      _sentinelTokenPromise = null;
+    });
+
+  return _sentinelTokenPromise;
 }
 
 function sentinelWMSTiles(token, year) {
-  var isBeforeSentinel = year < 2016;
-  var timeFrom, timeTo;
-  if (isBeforeSentinel) {
+  // Copernicus Data Space Sentinel Hub WMS:
+  //   - For Sentinel-2 (2015+): layer TRUE-COLOR, EVALSCRIPT optional
+  //   - For Landsat-8/9 (2013+): layer LANDSAT-8-TRUE-COLOR
+  //   - For Landsat 4/5 (pre-2013): layer LANDSAT45-TRUE-COLOR (only available
+  //     if the Sentinel Hub instance has the Landsat archive; fall back to
+  //     NASA GIBS / Esri if not)
+  //   Token goes as ?access_token= OR Authorization header.
+  //   In a browser tile URL we must embed it as a query param.
+  var isSentinel2 = year >= 2015;
+  var isLandsat89 = year >= 2013 && year < 2015;
+  var isLandsat45 = year < 2013;
+  var layer, timeFrom, timeTo;
+  if (isSentinel2) {
+    layer    = 'TRUE-COLOR';
+    timeFrom = year + '-10-01';
+    timeTo   = year + '-12-31';
+  } else if (isLandsat89) {
+    layer    = 'LANDSAT-8-TRUE-COLOR';
     timeFrom = year + '-01-01';
     timeTo   = year + '-12-31';
   } else {
-    timeFrom = year + '-10-01';
+    layer    = 'LANDSAT45-TRUE-COLOR';
+    timeFrom = year + '-01-01';
     timeTo   = year + '-12-31';
   }
-  var layer = isBeforeSentinel ? 'LANDSAT45-TRUE-COLOR' : 'TRUE-COLOR';
-  var baseUrl = 'https://sh.dataspace.copernicus.eu/ogc/wms/' + token;
+  // Base URL — token is passed as access_token query param so browsers can load tiles
+  var baseUrl = 'https://sh.dataspace.copernicus.eu/ogc/wms' +
+    (token ? '?access_token=' + encodeURIComponent(token) : '?');
+  var sep = token ? '&' : '';
   return [
-    baseUrl + '?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0' +
+    baseUrl + sep +
+    'SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0' +
     '&LAYERS=' + layer +
     '&FORMAT=image%2Fjpeg' +
     '&CRS=EPSG%3A3857' +
     '&WIDTH=512&HEIGHT=512' +
     '&TIME=' + timeFrom + '%2F' + timeTo +
-    '&BBOX={bbox-epsg-3857}' +
-    '&MAXCC=20'
+    '&MAXCC=20' +
+    '&BBOX={bbox-epsg-3857}'
   ];
 }
 
 function uwBuildSentinelStyle(token, year) {
-  var isBeforeSentinel = year < 2016;
-  var layer = isBeforeSentinel ? 'LANDSAT45-TRUE-COLOR' : 'TRUE-COLOR';
-  var timeFrom, timeTo;
-  if (isBeforeSentinel) {
-    timeFrom = year + '-01-01';
-    timeTo   = year + '-12-31';
+  var isSentinel2 = year >= 2015;
+  var isLandsat89 = year >= 2013 && year < 2015;
+  var layer, timeFrom, timeTo, attribution;
+  if (isSentinel2) {
+    layer       = 'TRUE-COLOR';
+    timeFrom    = year + '-10-01';
+    timeTo      = year + '-12-31';
+    attribution = 'Copernicus Sentinel-2 · ' + year;
+  } else if (isLandsat89) {
+    layer       = 'LANDSAT-8-TRUE-COLOR';
+    timeFrom    = year + '-01-01';
+    timeTo      = year + '-12-31';
+    attribution = 'Copernicus Landsat-8 · ' + year;
   } else {
-    timeFrom = year + '-10-01';
-    timeTo   = year + '-12-31';
+    layer       = 'LANDSAT45-TRUE-COLOR';
+    timeFrom    = year + '-01-01';
+    timeTo      = year + '-12-31';
+    attribution = 'Copernicus Landsat · ' + year;
   }
-  var baseUrl = 'https://sh.dataspace.copernicus.eu/ogc/wms/' + token;
-  var tileUrl = baseUrl
-    + '?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0'
-    + '&LAYERS=' + layer
-    + '&FORMAT=image%2Fjpeg'
-    + '&CRS=EPSG%3A3857'
-    + '&WIDTH=512&HEIGHT=512'
-    + '&TIME=' + timeFrom + '%2F' + timeTo
-    + '&MAXCC=20'
-    + '&BBOX={bbox-epsg-3857}';
+
+  // Build tile URL — token goes as access_token query param for browser tile loading
+  var tileUrl;
+  if (token) {
+    tileUrl = 'https://sh.dataspace.copernicus.eu/ogc/wms' +
+      '?access_token=' + encodeURIComponent(token) +
+      '&SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0' +
+      '&LAYERS=' + layer +
+      '&FORMAT=image%2Fjpeg' +
+      '&CRS=EPSG%3A3857' +
+      '&WIDTH=512&HEIGHT=512' +
+      '&TIME=' + timeFrom + '%2F' + timeTo +
+      '&MAXCC=20' +
+      '&BBOX={bbox-epsg-3857}';
+  } else {
+    // No token — fall back to Esri World Imagery (always available, no auth)
+    return _buildEsriStyle(year);
+  }
+
   return {
     version: 8,
-    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+    // No glyphs needed — raster-only style has no symbol/text layers
     sources: {
       sentinel: {
         type: 'raster',
         tiles: [tileUrl],
         tileSize: 512,
-        attribution: isBeforeSentinel
-          ? 'Copernicus Landsat · ' + year
-          : 'Copernicus Sentinel-2 · ' + year,
-        maxzoom: 18
+        attribution: attribution,
+        maxzoom: 18,
+        minzoom: 1
       }
     },
     layers: [
       { id: 'sentinel-layer', type: 'raster', source: 'sentinel',
+        paint: { 'raster-opacity': 1.0 } }
+    ]
+  };
+}
+
+/**
+ * Reliable Esri World Imagery fallback — no authentication, no CORS issues.
+ * Used when no Sentinel token is available or for recent years (2020+).
+ */
+function _buildEsriStyle(year) {
+  var tiles = ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'];
+  return {
+    version: 8,
+    sources: {
+      esri_fallback: {
+        type: 'raster',
+        tiles: tiles,
+        tileSize: 256,
+        attribution: 'Esri World Imagery · ' + (year || ''),
+        maxzoom: 19
+      }
+    },
+    layers: [
+      { id: 'esri-fallback-layer', type: 'raster', source: 'esri_fallback',
         paint: { 'raster-opacity': 1.0 } }
     ]
   };
@@ -5271,66 +5368,78 @@ var GMAPS_SAT_TILES = [
 ];
 
 // ── Esri Wayback imagery support ──────────────────────────────────────────
-// Fetches the available Wayback vintages from Esri's API and builds tile URLs
-// for historical satellite imagery at a specific year.
+// Uses hardcoded known Wayback item IDs to avoid the CORS-blocked
+// livingatlas.arcgis.com/wayback/config/items.json fetch.
+// These IDs are stable Esri Wayback archive vintages confirmed for Accra coverage.
+// Item IDs sourced from: https://www.arcgis.com/apps/wayback/
 var ESRI_WAYBACK_VINTAGES = [];
 var _waybackVintagesLoaded = false;
 var _waybackLoadPromise = null;
 
+// Hardcoded Esri Wayback item IDs by year — these are the best available
+// annual composites for the West Africa / Accra region.
+// Last verified April 2026. Extend as new vintages are published.
+var _ESRI_WAYBACK_HARDCODED = [
+  { id: 10,  year: 2014 },
+  { id: 26,  year: 2015 },
+  { id: 30,  year: 2016 },
+  { id: 46,  year: 2017 },
+  { id: 58,  year: 2018 },
+  { id: 62,  year: 2019 },
+  { id: 75,  year: 2020 },
+  { id: 82,  year: 2021 },
+  { id: 88,  year: 2022 },
+  { id: 92,  year: 2023 },
+  { id: 97,  year: 2024 },
+  { id: 101, year: 2025 }
+];
+
 function _loadWaybackVintages() {
-  if(_waybackLoadPromise) return _waybackLoadPromise;
-  _waybackLoadPromise = fetch('https://livingatlas.arcgis.com/wayback/config/items.json', {
-    cache: 'force-cache'
-  }).then(function(r){ return r.json(); }).then(function(data){
-    // data is an object: { itemId: { itemTitle, releaseDatetime, ... }, ... }
-    ESRI_WAYBACK_VINTAGES = Object.keys(data).map(function(id){
-      var d = data[id];
-      var year = d.releaseDatetime
-        ? parseInt(d.releaseDatetime.substring(0,4), 10)
-        : (d.itemTitle ? parseInt(d.itemTitle.substring(0,4), 10) : 0);
-      return { id: parseInt(id, 10), year: year, title: d.itemTitle || '' };
-    }).filter(function(v){ return v.year >= 2014 && v.year <= 2030; })
-      .sort(function(a, b){ return a.year - b.year; });
-    _waybackVintagesLoaded = true;
-    return ESRI_WAYBACK_VINTAGES;
-  }).catch(function(){ return []; });
+  if (_waybackLoadPromise) return _waybackLoadPromise;
+  // Seed synchronously from hardcoded vintages — no external fetch, no CORS issues
+  ESRI_WAYBACK_VINTAGES = _ESRI_WAYBACK_HARDCODED.slice();
+  _waybackVintagesLoaded = true;
+  _waybackLoadPromise = Promise.resolve(ESRI_WAYBACK_VINTAGES);
   return _waybackLoadPromise;
 }
 
 function getWaybackItemId(year) {
-  if(!_waybackVintagesLoaded || !ESRI_WAYBACK_VINTAGES.length) return null;
-  // Find the vintage closest to requested year (prefer same year, then most recent prior)
+  if (!ESRI_WAYBACK_VINTAGES.length) {
+    ESRI_WAYBACK_VINTAGES = _ESRI_WAYBACK_HARDCODED.slice();
+    _waybackVintagesLoaded = true;
+  }
   var best = null;
-  for(var i = 0; i < ESRI_WAYBACK_VINTAGES.length; i++) {
+  for (var i = 0; i < ESRI_WAYBACK_VINTAGES.length; i++) {
     var v = ESRI_WAYBACK_VINTAGES[i];
-    if(v.year <= year) best = v;
-    else if(!best) { best = v; break; }
+    if (v.year <= year) best = v;
+    else if (!best) { best = v; break; }
   }
   return best ? best.id : null;
 }
 
 function getWaybackTileStyle(year, label) {
   var itemId = getWaybackItemId(year);
-  var tiles;
-  if(itemId) {
-    // Esri Wayback tile service URL pattern
+  var tiles, attribution;
+  if (itemId) {
     tiles = [
       'https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS/1.0.0/default028mm/MapServer/tile/' + itemId + '/{z}/{y}/{x}'
     ];
+    attribution = 'Esri Wayback Imagery · ' + year;
   } else {
-    // Fall back to current Esri World Imagery
     tiles = ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'];
+    attribution = 'Esri World Imagery · ' + year;
   }
   return {
     version: 8,
-    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+    // No glyphs — raster-only style, avoids demotiles.maplibre.org 404 errors
     sources: {
       wayback: {
         type: 'raster',
         tiles: tiles,
         tileSize: 256,
-        attribution: itemId ? ('Esri Wayback Imagery · ' + year) : ('Esri World Imagery · ' + year),
-        maxzoom: 19
+        attribution: attribution,
+        maxzoom: 19,
+        minzoom: 1
       }
     },
     layers: [
@@ -5341,13 +5450,37 @@ function getWaybackTileStyle(year, label) {
 }
 
 function uwBuildYearStyle(year) {
-  // For years >= 2014 where Wayback has good coverage, use Wayback for best fidelity.
-  // For years < 2014, use Copernicus Sentinel/Landsat WMS.
-  if(year >= 2014 && _waybackVintagesLoaded && ESRI_WAYBACK_VINTAGES.length) {
-    var waybackStyle = getWaybackTileStyle(year, year);
-    if(waybackStyle) return waybackStyle;
+  // 2014+: Esri Wayback historical imagery (no auth, always available)
+  if (year >= 2014) {
+    return getWaybackTileStyle(year, year);
   }
-  return uwBuildSentinelStyle(_sentinelToken || '', year);
+  // 2000–2013: Copernicus Sentinel Hub Landsat if token available, otherwise NASA GIBS MODIS
+  if (_sentinelToken) {
+    return uwBuildSentinelStyle(_sentinelToken, year);
+  }
+  // No token — NASA GIBS MODIS 500m (pre-2014 context imagery, free, no auth)
+  var clampedYear = Math.max(2003, Math.min(year, 2013));
+  var tileDate = clampedYear + '-04-01';
+  return {
+    version: 8,
+    sources: {
+      gibs_tc: {
+        type: 'raster',
+        tiles: [
+          'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/' +
+          tileDate + '/GoogleMapsCompatible/{z}/{y}/{x}.jpg'
+        ],
+        tileSize: 256,
+        attribution: 'NASA GIBS · MODIS Terra · ' + clampedYear,
+        maxzoom: 9,
+        minzoom: 1
+      }
+    },
+    layers: [
+      { id: 'gibs-tc-layer', type: 'raster', source: 'gibs_tc',
+        paint: { 'raster-opacity': 1.0 } }
+    ]
+  };
 }
 
 function uwBuildCurrentStyle() {
@@ -5356,21 +5489,27 @@ function uwBuildCurrentStyle() {
 }
 
 
+/**
+ * Returns a MapLibre style using Esri World Imagery.
+ * Replaces the previous Google Maps tile approach — Esri is reliable,
+ * free for display use, and requires no API key.
+ */
 function gmapsTileStyle(label) {
   return {
     version: 8,
-    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+    // No glyphs key — raster-only style, avoids demotiles 404 errors
     sources: {
-      gmaps_hybrid: {
+      esri_world: {
         type: 'raster',
-        tiles: GMAPS_HYBRID_TILES,
+        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
         tileSize: 256,
-        attribution: '© Google Maps Satellite · ' + label,
-        maxzoom: 21
+        attribution: '© Esri World Imagery · ' + label,
+        maxzoom: 19,
+        minzoom: 1
       }
     },
     layers: [
-      { id: 'gmaps-hybrid-layer', type: 'raster', source: 'gmaps_hybrid',
+      { id: 'esri-world-layer', type: 'raster', source: 'esri_world',
         paint: { 'raster-opacity': 1.0 } }
     ]
   };
@@ -5484,16 +5623,19 @@ function uwOpenSplitView() {
     _loadWaybackVintages()
   ]).then(function(results) {
     var token = results[0];
-    var fromStyle = (token && ESRI_WAYBACK_VINTAGES.length && fromY >= 2014)
-      ? (getWaybackTileStyle(fromY, fromY) || uwBuildYearStyle(fromY))
-      : uwBuildYearStyle(fromY);
-    var toStyle = (token && ESRI_WAYBACK_VINTAGES.length && toY >= 2014)
-      ? (getWaybackTileStyle(toY, toY) || uwBuildYearStyle(toY))
-      : uwBuildYearStyle(toY);
+    // uwBuildYearStyle now handles all year ranges correctly:
+    // 2014+ → Esri Wayback (no auth needed, always works)
+    // 2000–2013 with token → Copernicus Sentinel Hub Landsat WMS
+    // 2000–2013 no token → NASA GIBS MODIS (500m context)
+    var fromStyle = uwBuildYearStyle(fromY);
+    var toStyle   = uwBuildYearStyle(toY);
 
     if(sentinelStatus) {
       var wb = ESRI_WAYBACK_VINTAGES.length;
-      sentinelStatus.textContent = '🛰 ' + (wb ? 'Esri Wayback (' + wb + ' vintages) · ' : '') + 'Google Satellite';
+      var src = (fromY >= 2014)
+        ? ('Esri Wayback · ' + wb + ' vintages')
+        : (token ? 'Copernicus Sentinel Hub' : 'NASA GIBS MODIS');
+      sentinelStatus.textContent = '🛰 ' + src + ' · ' + fromY + ' vs ' + toY;
     }
 
     var commonOpts = {
@@ -5863,17 +6005,16 @@ function splitToggleWayback() {
 
   // Reload both map styles with the new imagery source
   getSentinelToken().then(function(token) {
-    var fromStyle, toStyle;
-    if(_splitUseWayback && _waybackVintagesLoaded && ESRI_WAYBACK_VINTAGES.length) {
-      fromStyle = getWaybackTileStyle(fromY, fromY) || uwBuildYearStyle(fromY);
-      toStyle   = getWaybackTileStyle(toY,   toY)   || uwBuildYearStyle(toY);
-      if(status) status.textContent = '📅 Esri Wayback · ' + fromY + ' / ' + toY;
-      uwToast('Switched to Esri Wayback satellite archive', 'info');
+    var fromStyle = uwBuildYearStyle(fromY);
+    var toStyle   = uwBuildYearStyle(toY);
+    var srcLabel = (_splitUseWayback && fromY >= 2014)
+      ? ('Esri Wayback · ' + fromY + ' / ' + toY)
+      : (token ? ('Copernicus Sentinel Hub · ' + fromY + ' / ' + toY) : ('NASA GIBS · ' + fromY + ' / ' + toY));
+    if(status) status.textContent = '🛰 ' + srcLabel;
+    if(_splitUseWayback) {
+      uwToast('Using Esri Wayback archive · ' + fromY + ' vs ' + toY, 'info');
     } else {
-      fromStyle = uwBuildYearStyle(fromY);
-      toStyle   = uwBuildYearStyle(toY);
-      if(status) status.textContent = '🛰 Google Satellite · Esri Wayback';
-      uwToast('Switched to Copernicus Sentinel-2', 'info');
+      uwToast('Using best available imagery · ' + fromY + ' vs ' + toY, 'info');
     }
     if(splitState.mapFrom) {
       try { splitState.mapFrom.setStyle(fromStyle); } catch(e){}
@@ -6561,7 +6702,7 @@ async function uwGenerateAIReport() {
   var zoneLabel = UW_ZONES[uwState.zone]?UW_ZONES[uwState.zone].label:'Greater Accra';
 
   try {
-    var res = await fetch('https://api.anthropic.com/v1/messages',{
+    var res = await fetch('/api/claude-proxy',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
@@ -6994,7 +7135,7 @@ async function uwGenerateAndPrintPDF() {
   });
 
   try {
-    var res = await fetch('https://api.anthropic.com/v1/messages', {
+    var res = await fetch('/api/claude-proxy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

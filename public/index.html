@@ -5232,7 +5232,8 @@ function getSentinelToken() {
   if (_sentinelTokenPromise) return _sentinelTokenPromise;
 
   _sentinelTokenPromise = fetch('/api/sentinel-token', {
-    method: 'GET'
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' }
   })
     .then(function(r) {
       if (!r.ok) throw new Error('sentinel-token HTTP ' + r.status);
@@ -5689,12 +5690,25 @@ function uwBuildYearStyle(year, token) {
  *   3. Esri current + GIBS MODIS overlay (still shows visible seasonal difference)
  */
 function uwBuildYearStylesAsync(fromYear, toYear) {
-  // ALWAYS use Sentinel proxy — handles all years via server-side auth.
-  // S2 2015+, Landsat-8 2013-14, Landsat-TM pre-2013. Zero CORS issues.
-  return Promise.resolve({
-    fromStyle: uwBuildSentinelStyle('', fromYear),
-    toStyle:   uwBuildSentinelStyle('', toYear),
-    source:    'sentinel'
+  // Ensure Wayback vintages are loaded (synchronous, hardcoded)
+  _loadWaybackVintages();
+
+  return checkSentinelHealth().then(function(healthy) {
+    if (healthy) {
+      return {
+        fromStyle: uwBuildSentinelStyle('', fromYear),
+        toStyle:   uwBuildSentinelStyle('', toYear),
+        source:    'sentinel'
+      };
+    }
+    // Sentinel unavailable — use Esri Wayback for year-differentiated imagery.
+    // Wayback item IDs encode genuine annual composites that visually differ.
+    // For pre-2014 years we blend GIBS MODIS over Esri for temporal context.
+    return {
+      fromStyle: _buildBestFreeStyle(fromYear),
+      toStyle:   _buildBestFreeStyle(toYear),
+      source:    'wayback'
+    };
   });
 }
 
@@ -5910,7 +5924,7 @@ function uwOpenSplitView() {
   toMapEl.innerHTML   = '';
 
   var sentinelStatus = document.getElementById('split-sentinel-status');
-  if(sentinelStatus) sentinelStatus.textContent = '🛰 Loading Copernicus Sentinel /' + (fromY >= 2015 ? 'S2' : fromY >= 2013 ? 'L8' : 'L45') + ' · ' + fromY + ' vs ' + (toY >= 2015 ? 'S2' : toY >= 2013 ? 'L8' : 'L45') + ' · ' + toY + ' …';
+  if(sentinelStatus) sentinelStatus.textContent = '🛰 Checking satellite imagery source…';
 
   // Build styles — check Sentinel health first, fall back to NASA GIBS if unavailable
   uwBuildYearStylesAsync(fromY, toY).then(function(styles) {
@@ -5988,15 +6002,37 @@ function uwOpenSplitView() {
     splitState.mapFrom.on('move', syncFT);
     splitState.mapTo.on('move',   syncTF);
 
-    // Tile error logging only — Sentinel proxy returns transparent PNG on no-data, not errors.
-    // Never swap away from Sentinel since GIBS/Wayback have CORS issues in production.
-    function _onTileError(e) {
-      if (e && e.error && e.error.status && e.error.status !== 200) {
-        console.warn('[SplitView] tile error:', e.error && e.error.status);
+    // ── Tile error detection — if Sentinel proxy returns 500s, swap to GIBS ──
+    if (imgSource === 'sentinel') {
+      var _tileErrors = 0;
+      var _tileErrorSwapped = false;
+
+      function _onTileError(e) {
+        if (_tileErrorSwapped) return;
+        _tileErrors++;
+        if (_tileErrors >= 3) {
+          // Multiple tile failures — switch to GIBS
+          _tileErrorSwapped = true;
+          _sentinelHealthy = false;
+          console.warn('[SplitView] Sentinel tiles failing, switching to NASA GIBS fallback');
+          uwToast('ℹ Sentinel tiles unavailable — switching to NASA GIBS imagery', 'info');
+          if(sentinelStatus) {
+            var _gbSrc = function(y) { return y >= 2000 ? 'MODIS Terra · NASA GIBS' : 'Esri Archive'; };
+            sentinelStatus.textContent = '🛰 NASA GIBS · ' + fromY + ' ' + _gbSrc(fromY) + ' vs ' + toY + ' ' + _gbSrc(toY) + ' (auto-fallback)';
+          }
+          // Swap styles on both maps
+          try {
+            if(splitState.mapFrom) splitState.mapFrom.setStyle(_buildBestFreeStyle(fromY));
+            if(splitState.mapTo)   splitState.mapTo.setStyle(_buildBestFreeStyle(toY));
+          } catch(swapErr) {
+            console.error('[SplitView] Style swap error:', swapErr);
+          }
+        }
       }
+
+      splitState.mapFrom.on('error', _onTileError);
+      splitState.mapTo.on('error',   _onTileError);
     }
-    if(splitState.mapFrom) splitState.mapFrom.on('error', _onTileError);
-    if(splitState.mapTo)   splitState.mapTo.on('error',   _onTileError);
 
     var _fromLoaded = false, _toLoaded = false;
     function _onBothLoaded() {
@@ -6015,9 +6051,34 @@ function uwOpenSplitView() {
     _attachSplitClickHandlers();
 
   }).catch(function(err) {
-    // Should never reach here since uwBuildYearStylesAsync always resolves.
-    console.error('[SplitView] Unexpected error:', err && err.message ? err.message : err);
-    uwToast('Satellite view error — please try again', 'error');
+    // Fallback to best free style if async style build fails
+    console.error('[SplitView] Style build error:', err && err.message ? err.message : err);
+    uwToast('ℹ Retrying with Wayback/GIBS imagery…', 'info');
+    if(sentinelStatus) sentinelStatus.textContent = '⚠ Loading fallback imagery…';
+    // Re-attempt with year-differentiated free styles
+    try {
+      var fbFromStyle = _buildBestFreeStyle(fromY);
+      var fbToStyle   = _buildBestFreeStyle(toY);
+      var fbCenter = zone ? zone.center : ACCRA_CENTER;
+      var fbZoom   = zone ? Math.min(zone.zoom, 14) : 12;
+      var fbCommon = { center: fbCenter, zoom: fbZoom, pitch: 0, bearing: 0,
+        interactive: true, attributionControl: false, preserveDrawingBuffer: true, fadeDuration: 0 };
+      var fbFromEl = document.getElementById('split-slider-from-map');
+      var fbToEl   = document.getElementById('split-slider-to-map');
+      if(fbFromEl && fbToEl) {
+        fbFromEl.innerHTML = '';
+        fbToEl.innerHTML   = '';
+        splitState.mapFrom = new maplibregl.Map(Object.assign({}, fbCommon, { container: fbFromEl, style: fbFromStyle }));
+        splitState.mapTo   = new maplibregl.Map(Object.assign({}, fbCommon, { container: fbToEl,   style: fbToStyle   }));
+        splitState.mapFrom.on('load', function() { _initSplitSlider(); uwCheckBothMapsReady(); });
+        splitState.mapTo.on('load',   function() { _initSplitSlider(); uwCheckBothMapsReady(); });
+        setTimeout(function() { _initSplitSlider(); }, 3000);
+        if(sentinelStatus) sentinelStatus.textContent = '🛰 NASA GIBS · ' + fromY + ' MODIS vs ' + toY + ' MODIS (fallback)';
+      }
+    } catch(fb_err) {
+      console.error('[SplitView] Fatal fallback error:', fb_err);
+      uwToast('Split view error — please refresh and try again', 'error');
+    }
   });
 }
 

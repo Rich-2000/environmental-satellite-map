@@ -5301,12 +5301,13 @@ function _sentinelLayerForYear(year) {
  */
 function _sentinelProxyTileUrl(year) {
   var lyr = _sentinelLayerForYear(year);
-  // {bbox-epsg-3857} is a MapLibre magic token replaced per-tile
-  return '/api/sentinel-tile-proxy' +
+  // Use XYZ tile coordinates — proxy converts to correct EPSG:4326 WMS bbox.
+  // {z}/{x}/{y} are MapLibre magic tokens replaced per-tile request.
+  // This eliminates the {bbox-epsg-3857} → WMS axis-order bug that caused 404s.
+  return '/api/sentinel-tile-proxy/{z}/{x}/{y}' +
     '?layer=' + encodeURIComponent(lyr.layer) +
     '&year='  + encodeURIComponent(year) +
-    '&width=512&height=512' +
-    '&bbox={bbox-epsg-3857}';
+    '&width=512&height=512';
 }
 
 /**
@@ -5336,10 +5337,11 @@ function uwBuildSentinelStyle(token, year) {
       sentinel: {
         type:        'raster',
         tiles:       [tileUrl],
-        tileSize:    512,
+        tileSize:    256,   // MapLibre renders 256px tiles by default; proxy returns 512px content inside
+        scheme:      'xyz', // standard slippy-map tile ordering
         attribution: lyr.attribution,
-        maxzoom:     18,
-        minzoom:     1
+        minzoom:     1,
+        maxzoom:     17    // CDSE WMS practical maxzoom — avoids blank tiles at extreme zoom
       }
     },
     layers: [
@@ -5347,7 +5349,10 @@ function uwBuildSentinelStyle(token, year) {
         id:     'sentinel-layer',
         type:   'raster',
         source: 'sentinel',
-        paint:  { 'raster-opacity': 1.0 }
+        paint:  {
+          'raster-opacity':   1.0,
+          'raster-fade-duration': 300
+        }
       }
     ]
   };

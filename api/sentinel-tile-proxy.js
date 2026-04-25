@@ -1,204 +1,166 @@
 /**
- * sentinel-tile-proxy.js — v6 PRODUCTION (VERIFIED)
+ * sentinel-tile-proxy.js  — v5 PRODUCTION (Process API)
  * ════════════════════════════════════════════════════════════════════════════
- * XYZ tile proxy → Copernicus Data Space Sentinel Hub Process API
+ * XYZ tile proxy using the Sentinel Hub PROCESS API (not WMS).
  *
- * FIXES IN THIS VERSION (confirmed from live API responses):
+ * WHY PROCESS API (not WMS):
+ *   - WMS requires a separate "Configuration Instance ID" (e.g. "9d559...")
+ *     which is DIFFERENT from your OAuth client_id ("sh-xxxx...").
+ *   - Using client_id in the WMS URL path causes 404 on every tile.
+ *   - The Process API authenticates with the Bearer token alone — no
+ *     instance ID needed, works directly with your SENTINEL_CLIENT_ID +
+ *     SENTINEL_CLIENT_SECRET env vars.
+ *   - Process API supports historical imagery via TIME parameter.
  *
- *   BUG 1 (400 Bad Request on ALL tiles):
- *     Accept header 'image/jpeg, image/png, *\/*' is REJECTED by Process API.
- *     The API requires a SINGLE exact mime type.
- *     FIX: Accept: 'image/jpeg'
+ * SATELLITE COVERAGE BY YEAR:
+ *   2015–present  → Sentinel-2 L2A (10 m resolution, true colour)
+ *   2013–2014     → Landsat-8 OLI L2 (30 m, via CDSE Landsat collection)
+ *   pre-2013      → Landsat 4/5 TM (30 m, via CDSE Landsat collection)
  *
- *   BUG 2 (500 "Unable to resolve: LETML1" on pre-2013 tiles):
- *     Dataset ID 'landsat-etm-l1' does not exist. The correct identifiers
- *     per official Sentinel Hub docs (verified April 2026) are:
- *       Landsat 4-5 TM L1:  landsat-tm-l1   (prev: LTML1)
- *       Landsat 4-5 TM L2:  landsat-tm-l2   (prev: LTML2)
- *       Landsat 8-9 OLI L1: landsat-ot-l1   (prev: LOTL1)
- *       Landsat 8-9 OLI L2: landsat-ot-l2   (prev: LOTL2)
- *       Sentinel-2 L1C:     sentinel-2-l1c
- *       Sentinel-2 L2A:     sentinel-2-l2a
- *
- *   BUG 3 (WMS 404 on year=2015 tiles from old proxy still in browser cache):
- *     Old v4 proxy used WMS with wrong instance ID. This proxy uses the
- *     Process API directly — no instance/configuration UUID needed.
- *
- * COVERAGE:
- *   2017–present  → sentinel-2-l2a   (10m, best quality, atmospherically corrected)
- *   2015–2016     → sentinel-2-l1c   (10m, TOA reflectance — L2A not available pre-2017)
- *   2021–present  → landsat-ot-l2    (30m, Landsat 8/9, CDSE has data from 2021)
- *   1984–2012     → landsat-tm-l1    (30m, Landsat 4/5 TM, full archive)
+ * ROUTE:  GET /api/sentinel-tile-proxy/[z]/[x]/[y]?year=2010&layer=TRUE-COLOR
  *
  * ENV VARS (Vercel → Settings → Environment Variables):
  *   SENTINEL_CLIENT_ID      — "sh-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
- *   SENTINEL_CLIENT_SECRET  — client secret from Copernicus Data Space
- *
- * VERCEL ROUTE (vercel.json):
- *   { "source": "/api/sentinel-tile-proxy/:z/:x/:y",
- *     "destination": "/api/sentinel-tile-proxy?z=:z&x=:x&y=:y" }
+ *   SENTINEL_CLIENT_SECRET  — your CDSE OAuth client secret
  * ════════════════════════════════════════════════════════════════════════════
  */
 
-// ── Module-level token cache ──────────────────────────────────────────────
+// ── Module-level token cache ────────────────────────────────────────────────
 let _cachedToken = null;
 let _tokenExpiry = 0;
 
-// ── XYZ → EPSG:4326 bbox ─────────────────────────────────────────────────
+// ── Tile → EPSG:4326 bbox conversion ────────────────────────────────────────
 function tile2bbox(z, x, y) {
-  const n = Math.pow(2, z);
-  const minLon =  (x / n)       * 360 - 180;
-  const maxLon = ((x + 1) / n)  * 360 - 180;
-  const maxLat = Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n)))       * (180 / Math.PI);
-  const minLat = Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + 1) / n))) * (180 / Math.PI);
+  const n      = Math.pow(2, z);
+  const minLon = (x / n) * 360 - 180;
+  const maxLon = ((x + 1) / n) * 360 - 180;
+  const maxLat = Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n))) * 180 / Math.PI;
+  const minLat = Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + 1) / n))) * 180 / Math.PI;
   return { minLon, minLat, maxLon, maxLat };
 }
 
-// ── OAuth2 token (cached) ─────────────────────────────────────────────────
-async function getToken(clientId, clientSecret) {
+// ── OAuth2 token (CDSE identity endpoint) ───────────────────────────────────
+async function getCDSEToken(clientId, clientSecret) {
   const now = Date.now();
   if (_cachedToken && _tokenExpiry > now + 30_000) return _cachedToken;
+
+  const body = new URLSearchParams({
+    grant_type:    'client_credentials',
+    client_id:     clientId,
+    client_secret: clientSecret,
+  });
 
   const res = await fetch(
     'https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token',
     {
-      method: 'POST',
+      method:  'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type:    'client_credentials',
-        client_id:     clientId,
-        client_secret: clientSecret,
-      }).toString(),
+      body:    body.toString(),
     }
   );
 
   if (!res.ok) {
     const txt = await res.text();
-    throw new Error(`OAuth token error ${res.status}: ${txt.slice(0, 300)}`);
+    throw new Error(`CDSE token error ${res.status}: ${txt.slice(0, 300)}`);
   }
 
-  const json  = await res.json();
-  _cachedToken = json.access_token;
-  _tokenExpiry = now + ((json.expires_in || 600) - 60) * 1000;
+  const data   = await res.json();
+  _cachedToken = data.access_token;
+  _tokenExpiry = now + ((data.expires_in || 600) - 60) * 1000;
   return _cachedToken;
 }
 
-// ── Dataset selection — VERIFIED dataset IDs from official CDSE docs ──────
-// Source: https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Data/
-// and https://docs.sentinel-hub.com/api/latest/data/
-function getDataset(year) {
+// ── Evalscripts ─────────────────────────────────────────────────────────────
+
+const EVALSCRIPTS = {
+  // Sentinel-2 L2A true colour (2015–present)
+  's2-truecolor': `//VERSION=3
+function setup() {
+  return {
+    input: [{ bands: ["B02","B03","B04","dataMask"], units: "DN" }],
+    output: { bands: 4, sampleType: "UINT8" }
+  };
+}
+function evaluatePixel(s) {
+  var gain = 3.5;
+  return [
+    Math.round(Math.min(s.B04/10000*gain,1)*255),
+    Math.round(Math.min(s.B03/10000*gain,1)*255),
+    Math.round(Math.min(s.B02/10000*gain,1)*255),
+    s.dataMask ? 255 : 0
+  ];
+}`,
+
+  // Landsat-8/9 OLI true colour (2013–2014 via CDSE)
+  'landsat-oli-truecolor': `//VERSION=3
+function setup() {
+  return {
+    input: [{ bands: ["B04","B03","B02","dataMask"], units: "DN" }],
+    output: { bands: 4, sampleType: "UINT8" }
+  };
+}
+function evaluatePixel(s) {
+  var gain = 3.0;
+  return [
+    Math.round(Math.min(s.B04/10000*gain,1)*255),
+    Math.round(Math.min(s.B03/10000*gain,1)*255),
+    Math.round(Math.min(s.B02/10000*gain,1)*255),
+    s.dataMask ? 255 : 0
+  ];
+}`,
+
+  // Landsat 4/5 TM true colour (pre-2013 via CDSE)
+  'landsat-tm-truecolor': `//VERSION=3
+function setup() {
+  return {
+    input: [{ bands: ["B03","B02","B01","dataMask"], units: "DN" }],
+    output: { bands: 4, sampleType: "UINT8" }
+  };
+}
+function evaluatePixel(s) {
+  var gain = 3.0;
+  return [
+    Math.round(Math.min(s.B03/10000*gain,1)*255),
+    Math.round(Math.min(s.B02/10000*gain,1)*255),
+    Math.round(Math.min(s.B01/10000*gain,1)*255),
+    s.dataMask ? 255 : 0
+  ];
+}`,
+};
+
+// ── Dataset config by year ───────────────────────────────────────────────────
+function getDatasetConfig(year) {
   const y = parseInt(year, 10);
 
-  if (y >= 2017) {
-    // Sentinel-2 L2A — atmospherically corrected surface reflectance
-    // Available on CDSE from 2017 onwards (L2A processing was not done earlier)
-    return {
-      type:        'sentinel-2-l2a',
-      label:       'Sentinel-2 L2A',
-      // Sentinel-2 bands: B04=Red(665nm), B03=Green(560nm), B02=Blue(490nm)
-      // L2A values are reflectance 0.0–1.0 (divide by 10000 if integer format)
-      evalscript: `//VERSION=3
-function setup() {
-  return {
-    input:  [{ bands: ["B04", "B03", "B02", "dataMask"] }],
-    output: { bands: 4, sampleType: "UINT8" }
-  };
-}
-function evaluatePixel(s) {
-  // s.B04/B03/B02 are reflectance 0–1; multiply by gain and scale to 0–255
-  var gain = 3.5;
-  return [
-    Math.min(255, Math.max(0, Math.round(s.B04 * gain * 255))),
-    Math.min(255, Math.max(0, Math.round(s.B03 * gain * 255))),
-    Math.min(255, Math.max(0, Math.round(s.B02 * gain * 255))),
-    s.dataMask * 255
-  ];
-}`,
-    };
-  }
-
   if (y >= 2015) {
-    // Sentinel-2 L1C — top-of-atmosphere reflectance (L2A not available pre-2017)
     return {
-      type:        'sentinel-2-l1c',
-      label:       'Sentinel-2 L1C',
-      evalscript: `//VERSION=3
-function setup() {
-  return {
-    input:  [{ bands: ["B04", "B03", "B02", "dataMask"] }],
-    output: { bands: 4, sampleType: "UINT8" }
-  };
-}
-function evaluatePixel(s) {
-  var gain = 3.5;
-  return [
-    Math.min(255, Math.max(0, Math.round(s.B04 * gain * 255))),
-    Math.min(255, Math.max(0, Math.round(s.B03 * gain * 255))),
-    Math.min(255, Math.max(0, Math.round(s.B02 * gain * 255))),
-    s.dataMask * 255
-  ];
-}`,
+      type:       'sentinel-2-l2a',
+      evalscript: EVALSCRIPTS['s2-truecolor'],
+      label:      'Sentinel-2 L2A',
+      maxCC:       30,
     };
   }
 
   if (y >= 2013) {
-    // Landsat 8-9 OLI L1 — CDSE data starts from 2021 for Landsat 8/9
-    // For 2013-2020, Landsat 8 data EXISTS in archive but CDSE coverage starts 2021
-    // Use L1 (full archive) rather than L2 for maximum year coverage
+    // Landsat 8 OLI Collection 2, Level-2
     return {
-      type:        'landsat-ot-l1',
-      label:       'Landsat 8-9 OLI L1',
-      // Landsat-8/9 L1: B04=Red, B03=Green, B02=Blue — DN values 0–65535
-      // Typical reflective band range 0–10000 DN → scale by 0.0000275 - 0.2 for TOA
-      evalscript: `//VERSION=3
-function setup() {
-  return {
-    input:  [{ bands: ["B04", "B03", "B02", "dataMask"] }],
-    output: { bands: 4, sampleType: "UINT8" }
-  };
-}
-function evaluatePixel(s) {
-  // L1 DNs — apply simple linear stretch
-  // Typical useful DN range for Landsat-8 is ~6000–25000 for reflective bands
-  var scale = 255.0 / 25000.0;
-  return [
-    Math.min(255, Math.max(0, Math.round(s.B04 * scale * 3.5))),
-    Math.min(255, Math.max(0, Math.round(s.B03 * scale * 3.5))),
-    Math.min(255, Math.max(0, Math.round(s.B02 * scale * 3.5))),
-    s.dataMask * 255
-  ];
-}`,
+      type:       'landsat-ot-l2',
+      evalscript: EVALSCRIPTS['landsat-oli-truecolor'],
+      label:      'Landsat-8 OLI L2',
+      maxCC:       40,
     };
   }
 
-  // 1984–2012: Landsat 4-5 TM Level 1
-  // Official dataset ID: landsat-tm-l1 (previously LTML1)
-  // Bands: B03=Red(660nm), B02=Green(560nm), B01=Blue(480nm)
+  // Landsat 4/5 TM via CDSE (ESA-processed, available 1984+)
   return {
-    type:        'landsat-tm-l1',
-    label:       'Landsat 4-5 TM L1',
-    evalscript: `//VERSION=3
-function setup() {
-  return {
-    input:  [{ bands: ["B03", "B02", "B01", "dataMask"] }],
-    output: { bands: 4, sampleType: "UINT8" }
-  };
-}
-function evaluatePixel(s) {
-  // Landsat TM L1: DN values (0–255 8-bit). Typical useful range 10–200.
-  // Scale so mid-range is bright — multiply by ~2.0 for natural brightness
-  var scale = 2.0;
-  return [
-    Math.min(255, Math.max(0, Math.round(s.B03 * scale))),
-    Math.min(255, Math.max(0, Math.round(s.B02 * scale))),
-    Math.min(255, Math.max(0, Math.round(s.B01 * scale))),
-    s.dataMask * 255
-  ];
-}`,
+    type:       'landsat-tm-l1',
+    evalscript: EVALSCRIPTS['landsat-tm-truecolor'],
+    label:      'Landsat TM L1',
+    maxCC:       50,
   };
 }
 
-// ── Main handler ──────────────────────────────────────────────────────────
+// ── Main handler ─────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   // CORS
   res.setHeader('Access-Control-Allow-Origin',  '*');
@@ -211,21 +173,17 @@ export default async function handler(req, res) {
   const clientId     = process.env.SENTINEL_CLIENT_ID;
   const clientSecret = process.env.SENTINEL_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
-    return res.status(500).json({
-      error: 'Sentinel credentials not configured',
-      hint:  'Set SENTINEL_CLIENT_ID and SENTINEL_CLIENT_SECRET in Vercel Environment Variables'
-    });
+    return res.status(500).json({ error: 'SENTINEL_CLIENT_ID / SENTINEL_CLIENT_SECRET not configured in Vercel env vars' });
   }
 
-  // ── Parse tile coordinates ────────────────────────────────────────────────
-  // Vercel rewrite: /api/sentinel-tile-proxy/:z/:x/:y → ?z=:z&x=:x&y=:y
+  // ── Parse tile z/x/y ──────────────────────────────────────────────────────
   let z, x, y;
-  if (req.query.z !== undefined) {
+
+  if (req.query.z !== undefined && req.query.x !== undefined && req.query.y !== undefined) {
     z = parseInt(req.query.z, 10);
     x = parseInt(req.query.x, 10);
     y = parseInt(req.query.y, 10);
   } else {
-    // Fallback: parse from URL path
     const parts = (req.url || '').split('?')[0].split('/').filter(Boolean);
     const idx   = parts.indexOf('sentinel-tile-proxy');
     if (idx !== -1 && parts.length >= idx + 4) {
@@ -235,120 +193,142 @@ export default async function handler(req, res) {
     }
   }
 
-  if ([z, x, y].some(v => isNaN(v)) || z < 0 || z > 22) {
+  if (isNaN(z) || isNaN(x) || isNaN(y) || z < 0 || z > 22) {
     return res.status(400).json({
-      error: 'Invalid tile coordinates',
-      received: { z: req.query.z, x: req.query.x, y: req.query.y }
+      error:    'Invalid or missing tile coordinates (z, x, y)',
+      received: { z: req.query.z, x: req.query.x, y: req.query.y },
     });
   }
 
+  // ── Other params ──────────────────────────────────────────────────────────
   const yr = parseInt(req.query.year || new Date().getFullYear(), 10);
   const w  = Math.min(512, Math.max(64, parseInt(req.query.width  || '512', 10)));
   const h  = Math.min(512, Math.max(64, parseInt(req.query.height || '512', 10)));
 
+  // ── Dataset ───────────────────────────────────────────────────────────────
+  const ds = getDatasetConfig(yr);
+
+  // ── Tile → geographic bbox ────────────────────────────────────────────────
   const { minLon, minLat, maxLon, maxLat } = tile2bbox(z, x, y);
-  const ds = getDataset(yr);
 
-  // Use a 6-month dry season window for West Africa (Nov–Apr = lowest cloud cover)
-  // Broadening to full year if needed for sparse Landsat coverage
-  const isLandsat = ds.type.startsWith('landsat');
-  const timeFrom  = isLandsat ? `${yr}-01-01T00:00:00Z` : `${yr}-10-01T00:00:00Z`;
-  const timeTo    = isLandsat ? `${yr}-12-31T23:59:59Z` : `${yr}-04-30T23:59:59Z`;
+  // Full-year range for best cloud-free mosaic
+  const timeFrom = `${yr}-01-01T00:00:00Z`;
+  const timeTo   = `${yr}-12-31T23:59:59Z`;
 
-  // For years where the to-date would be in the future, cap to today
-  const today = new Date().toISOString().slice(0, 10);
-  const timeToCapped = timeTo.slice(0, 10) > today ? `${today}T23:59:59Z` : timeTo;
-
-  const requestBody = {
+  // ── Assemble Process API body ─────────────────────────────────────────────
+  const processBody = {
     input: {
       bounds: {
-        bbox: [minLon, minLat, maxLon, maxLat],
+        bbox:       [minLon, minLat, maxLon, maxLat],
         properties: { crs: 'http://www.opengis.net/def/crs/EPSG/0/4326' },
       },
-      data: [{
-        type: ds.type,
-        dataFilter: {
-          timeRange: {
-            from: timeFrom,
-            to:   timeToCapped,
+      data: [
+        {
+          type: ds.type,
+          dataFilter: {
+            timeRange:       { from: timeFrom, to: timeTo },
+            maxCloudCoverage: ds.maxCC,
+            mosaickingOrder: 'leastCC',
           },
-          ...(ds.type.includes('sentinel-2') ? { maxCloudCoverage: 30 } : {}),
-          mosaickingOrder: 'leastCC',
         },
-      }],
+      ],
     },
     output: {
-      width:  w,
-      height: h,
-      responses: [{
-        identifier: 'default',
-        format: {
-          type:    'image/png',   // PNG supports transparency (dataMask alpha channel)
-          quality: 90,
-        },
-      }],
+      width:     w,
+      height:    h,
+      responses: [{ identifier: 'default', format: { type: 'image/png' } }],
     },
     evalscript: ds.evalscript,
   };
 
   try {
-    const token = await getToken(clientId, clientSecret);
+    const token = await getCDSEToken(clientId, clientSecret);
 
-    const apiRes = await fetch(
-      'https://sh.dataspace.copernicus.eu/api/v1/process',
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type':  'application/json',
-          // ✅ SINGLE exact mime type — the Process API rejects comma-separated lists
-          'Accept':        'image/png',
-        },
-        body: JSON.stringify(requestBody),
-      }
-    );
+    console.log(`[sentinel-tile-proxy] ${ds.label} · year=${yr} · z=${z} x=${x} y=${y}`);
 
-    const ct = apiRes.headers.get('content-type') || '';
+    const processRes = await fetch('https://sh.dataspace.copernicus.eu/api/v1/process', {
+      method:  'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': `Bearer ${token}`,
+        'Accept':        'image/png,image/*,*/*',
+      },
+      body: JSON.stringify(processBody),
+    });
 
-    if (!apiRes.ok) {
-      const errText = await apiRes.text();
-      console.error(`[sentinel-tile-proxy] API ${apiRes.status} z=${z} x=${x} y=${y} type=${ds.type} year=${yr}:`, errText.slice(0, 500));
-      return res.status(apiRes.status).json({
-        error:   'Sentinel Hub Process API error',
-        status:  apiRes.status,
-        dataset: ds.type,
-        year:    yr, z, x, y,
-        detail:  errText.slice(0, 400),
-      });
-    }
-
-    if (!ct.includes('image/')) {
-      const errText = await apiRes.text();
-      console.error(`[sentinel-tile-proxy] Non-image response (${ct}):`, errText.slice(0, 300));
-      return res.status(502).json({
-        error: 'Non-image response from Sentinel Hub',
-        contentType: ct,
-        dataset: ds.type,
-        year: yr, z, x, y,
+    // Handle 401/403 — clear cached token
+    if (processRes.status === 401 || processRes.status === 403) {
+      _cachedToken = null;
+      _tokenExpiry = 0;
+      const errText = await processRes.text();
+      console.error(`[sentinel-tile-proxy] Auth error ${processRes.status}:`, errText.slice(0, 300));
+      return res.status(processRes.status).json({
+        error:  'Sentinel Hub auth failed — check SENTINEL_CLIENT_ID and SENTINEL_CLIENT_SECRET in Vercel env vars',
         detail: errText.slice(0, 200),
       });
     }
 
-    const buf = await apiRes.arrayBuffer();
+    // Handle 4xx/5xx
+    if (!processRes.ok) {
+      const ct      = processRes.headers.get('content-type') ?? '';
+      let errDetail = '';
+      try {
+        errDetail = ct.includes('json')
+          ? JSON.stringify(await processRes.json())
+          : (await processRes.text()).slice(0, 400);
+      } catch (_) {}
 
-    res.setHeader('Content-Type',         'image/png');
-    res.setHeader('Cache-Control',        'public, max-age=604800, stale-while-revalidate=2592000');
-    res.setHeader('X-Sentinel-Dataset',   ds.type);
-    res.setHeader('X-Sentinel-Label',     ds.label);
-    res.setHeader('X-Sentinel-Year',      String(yr));
-    res.setHeader('X-Tile',              `${z}/${x}/${y}`);
+      console.error(`[sentinel-tile-proxy] Process API ${processRes.status} z=${z}/${x}/${y}:`, errDetail.slice(0, 200));
+
+      // No data for this tile/year: return a transparent PNG (keeps map clean)
+      if (processRes.status === 400 || processRes.status === 422) {
+        return sendTransparentTile(res, ds.label, yr, z, x, y);
+      }
+      return res.status(processRes.status).json({
+        error:  `Sentinel Process API error ${processRes.status}`,
+        detail: errDetail.slice(0, 200),
+        layer:  ds.label, year: yr, z, x, y,
+      });
+    }
+
+    // Reject unexpected non-image content-type
+    const ct = processRes.headers.get('content-type') ?? '';
+    if (!ct.includes('image/')) {
+      const errText = await processRes.text();
+      console.error(`[sentinel-tile-proxy] Non-image response (${ct}):`, errText.slice(0, 200));
+      return sendTransparentTile(res, ds.label, yr, z, x, y);
+    }
+
+    // Stream image tile back with generous cache headers
+    const buf = await processRes.arrayBuffer();
+    const pu  = processRes.headers.get('x-processingunits-spent') ?? '?';
+    console.log(`[sentinel-tile-proxy] ✓ ${ds.label} ${yr} z=${z}/${x}/${y} PU:${pu}`);
+
+    res.setHeader('Content-Type',     'image/png');
+    res.setHeader('Cache-Control',    'public, max-age=86400, stale-while-revalidate=604800');
+    res.setHeader('X-Sentinel-Year',  String(yr));
+    res.setHeader('X-Sentinel-Layer', ds.label);
+    res.setHeader('X-Tile-Coords',    `${z}/${x}/${y}`);
     return res.status(200).send(Buffer.from(buf));
 
   } catch (err) {
     console.error('[sentinel-tile-proxy] error:', err.message);
-    return res.status(500).json({
-      error: 'Proxy error', detail: err.message,
-      dataset: ds.type, year: yr, z, x, y,
-    });
+    return res.status(500).json({ error: 'Tile proxy error', detail: err.message });
   }
+}
+
+// ── Transparent 1×1 PNG fallback (no data for this tile) ────────────────────
+function sendTransparentTile(res, label, yr, z, x, y) {
+  // Minimal valid 1×1 transparent PNG (67 bytes)
+  const transparentPng = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+    'base64'
+  );
+  console.log(`[sentinel-tile-proxy] No data → transparent tile ${label} ${yr} z=${z}/${x}/${y}`);
+  res.setHeader('Content-Type',     'image/png');
+  res.setHeader('Cache-Control',    'public, max-age=3600');
+  res.setHeader('X-Sentinel-Year',  String(yr));
+  res.setHeader('X-Sentinel-Layer', label);
+  res.setHeader('X-No-Data',        'true');
+  return res.status(200).send(transparentPng);
 }

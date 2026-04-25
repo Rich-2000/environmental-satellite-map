@@ -1,11 +1,5 @@
 {
   "version": 2,
-  "rewrites": [
-    {
-      "source": "/api/sentinel-tile-proxy/:z/:x/:y",
-      "destination": "/api/sentinel-tile-proxy?z=:z&x=:x&y=:y"
-    }
-  ],
   "headers": [
     {
       "source": "/api/(.*)",
@@ -13,6 +7,12 @@
         { "key": "Access-Control-Allow-Origin",  "value": "*" },
         { "key": "Access-Control-Allow-Methods", "value": "GET, POST, OPTIONS" },
         { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization" }
+      ]
+    },
+    {
+      "source": "/api/sentinel-tile-proxy",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=86400, stale-while-revalidate=604800" }
       ]
     }
   ]

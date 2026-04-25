@@ -5300,12 +5300,12 @@ function _sentinelLayerForYear(year) {
  * Params: layer, year, bbox, width, height
  */
 function _sentinelProxyTileUrl(year) {
-  var lyr = _sentinelLayerForYear(year);
-  // Use XYZ tile coordinates — proxy converts to correct EPSG:4326 WMS bbox.
-  // {z}/{x}/{y} are MapLibre magic tokens replaced per-tile request.
-  // This eliminates the {bbox-epsg-3857} → WMS axis-order bug that caused 404s.
-  return '/api/sentinel-tile-proxy/{z}/{x}/{y}' +
-    '?layer=' + encodeURIComponent(lyr.layer) +
+  // CRITICAL: Use query params ONLY for z/x/y — NOT path segments.
+  // Vercel rewrites like /api/sentinel-tile-proxy/:z/:x/:y → ?z=:z&x=:x&y=:y
+  // silently DROP all other query params (year=, width=, height=).
+  // Query-param-only URLs bypass Vercel rewrites entirely and keep ALL params.
+  return '/api/sentinel-tile-proxy' +
+    '?z={z}&x={x}&y={y}' +
     '&year='  + encodeURIComponent(year) +
     '&width=512&height=512';
 }

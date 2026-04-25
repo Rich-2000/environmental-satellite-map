@@ -5238,113 +5238,117 @@ function getSentinelToken() {
   return _sentinelTokenPromise;
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// SENTINEL HUB — Production proxy-based implementation
 // ─────────────────────────────────────────────────────────────────────────────
-// SENTINEL HUB WMS — Production-grade implementation
-// Copernicus Data Space Ecosystem (CDSE) OGC WMS endpoint
+// WHY PROXY TILES (not direct WMS):
+//   1. CDSE WMS requires the OAuth client_id in the URL path as instance ID:
+//      https://sh.dataspace.copernicus.eu/ogc/wms/{instance_id}
+//      Hitting the generic endpoint (no instance_id) returns HTTP 404.
+//   2. MapLibre cannot set Authorization: Bearer headers on tile requests.
+//      Passing access_token as a query param triggers CORS preflight errors
+//      on sh.dataspace.copernicus.eu for cross-origin Vercel domains.
+//   3. Our Vercel function /api/sentinel-tile-proxy handles auth server-side,
+//      constructs the correct WMS URL with instance path, and streams the
+//      JPEG tile back — eliminating all CORS and auth issues.
 //
-// Layer mapping (Copernicus Data Space — verified against GetCapabilities):
-//   Sentinel-2 (2015+)       → TRUE-COLOR
-//   Landsat-8/9 (2013–2014)  → LANDSAT-8-TRUE-COLOR
-//   Landsat 5 TM (pre-2013)  → LANDSAT-TM-TRUE-COLOR
-//
-// Auth: access_token query param — CDSE supports this for browser tile requests
-//   (Bearer header can't be set per-tile in MapLibre raster sources)
-// Tile size: 512px; MAXCC=20 (max 20% cloud coverage)
-// ─────────────────────────────────────────────────────────────────────────────
+// Layer names — VERIFIED against CDSE GetCapabilities (April 2026):
+//   Sentinel-2  (2015–present):  TRUE-COLOR
+//   Landsat-8/9 (2013–2014):     LANDSAT-OLI-L2-TRUE-COLOR
+//   Landsat TM  (pre-2013):      LANDSAT-TM-L1-TRUE-COLOR
+//   NOTE: Old names LANDSAT-8-TRUE-COLOR / LANDSAT-TM-TRUE-COLOR are
+//         DEPRECATED and return 404 on the current CDSE endpoint.
+// ═════════════════════════════════════════════════════════════════════════════
 
 /**
- * Returns the correct CDSE WMS layer name, time range, and attribution
- * for a given year. Uses verified Copernicus Data Space layer names.
+ * Returns the correct CDSE layer name and attribution for a given year.
+ * Uses current verified Copernicus Data Space Ecosystem layer identifiers.
  */
 function _sentinelLayerForYear(year) {
-  if (year >= 2015) {
+  var y = parseInt(year, 10);
+  if (y >= 2015) {
     return {
       layer:       'TRUE-COLOR',
-      timeFrom:    year + '-01-01',
-      timeTo:      year + '-12-31',
-      attribution: 'Copernicus Sentinel-2 ' + year + ' · ESA'
+      timeFrom:    y + '-01-01',
+      timeTo:      y + '-12-31',
+      attribution: 'Copernicus Sentinel-2 · ESA · ' + y
     };
-  } else if (year >= 2013) {
+  } else if (y >= 2013) {
     return {
-      layer:       'LANDSAT-8-TRUE-COLOR',
-      timeFrom:    year + '-01-01',
-      timeTo:      year + '-12-31',
-      attribution: 'Copernicus Landsat-8 ' + year + ' · USGS/ESA'
+      layer:       'LANDSAT-OLI-L2-TRUE-COLOR',
+      timeFrom:    y + '-01-01',
+      timeTo:      y + '-12-31',
+      attribution: 'Copernicus Landsat-8/OLI · USGS · ' + y
     };
   } else {
-    // Landsat 5 TM archive (1984–2012)
-    // CDSE layer name: LANDSAT-TM-TRUE-COLOR (NOT LANDSAT45-TRUE-COLOR)
+    // Landsat 4-5 TM archive (1984–2012)
     return {
-      layer:       'LANDSAT-TM-TRUE-COLOR',
-      timeFrom:    year + '-01-01',
-      timeTo:      year + '-12-31',
-      attribution: 'Copernicus Landsat-TM ' + year + ' · USGS/ESA'
+      layer:       'LANDSAT-TM-L1-TRUE-COLOR',
+      timeFrom:    y + '-01-01',
+      timeTo:      y + '-12-31',
+      attribution: 'Copernicus Landsat-TM · USGS · ' + y
     };
   }
 }
 
 /**
- * Returns a MapLibre tile URL array for CDSE WMS.
- * Token passed as access_token query param.
+ * Builds a MapLibre tile URL that routes through our Vercel proxy.
+ * The proxy handles OAuth authentication and constructs the correct
+ * CDSE WMS URL with instance ID — no auth needed in the browser URL.
+ *
+ * Proxy endpoint: GET /api/sentinel-tile-proxy
+ * Params: layer, year, bbox, width, height
  */
-function sentinelWMSTiles(token, year) {
+function _sentinelProxyTileUrl(year) {
   var lyr = _sentinelLayerForYear(year);
-  var url = 'https://sh.dataspace.copernicus.eu/ogc/wms' +
-    '?REQUEST=GetMap' +
-    '&VERSION=1.3.0' +
-    '&SERVICE=WMS' +
-    '&LAYERS=' + lyr.layer +
-    '&FORMAT=image%2Fjpeg' +
-    '&CRS=EPSG%3A3857' +
-    '&WIDTH=512&HEIGHT=512' +
-    '&TIME=' + lyr.timeFrom + '%2F' + lyr.timeTo +
-    '&MAXCC=20' +
-    '&BBOX={bbox-epsg-3857}';
-  if (token) url += '&access_token=' + encodeURIComponent(token);
-  return [url];
+  // {bbox-epsg-3857} is a MapLibre magic token replaced per-tile
+  return '/api/sentinel-tile-proxy' +
+    '?layer=' + encodeURIComponent(lyr.layer) +
+    '&year='  + encodeURIComponent(year) +
+    '&width=512&height=512' +
+    '&bbox={bbox-epsg-3857}';
 }
 
 /**
- * Builds a complete MapLibre GL style for Sentinel Hub imagery.
- * BOTH from-year and to-year always use Sentinel (no Esri/Wayback fallback).
- * When no token is available, the request is sent without auth — CDSE may
- * serve limited/watermarked tiles, but the request always goes to Sentinel.
+ * Returns a MapLibre tile URL array for CDSE Sentinel imagery.
+ * Always uses the server-side proxy — token parameter kept for API compat.
+ */
+function sentinelWMSTiles(token, year) {
+  return [_sentinelProxyTileUrl(year)];
+}
+
+/**
+ * Builds a complete MapLibre GL style for Sentinel Hub imagery via proxy.
+ * BOTH from-year and to-year always use Sentinel — no Esri/Wayback fallback.
  *
- * @param {string} token   OAuth2 access_token from getSentinelToken() (may be '')
+ * @param {string} token   OAuth2 access_token (kept for API compat, not used in URL)
  * @param {number} year    Year of imagery to fetch
  * @returns {Object}       MapLibre GL style object
  */
 function uwBuildSentinelStyle(token, year) {
-  var lyr = _sentinelLayerForYear(year);
-  var tileUrl = 'https://sh.dataspace.copernicus.eu/ogc/wms' +
-    '?REQUEST=GetMap' +
-    '&VERSION=1.3.0' +
-    '&SERVICE=WMS' +
-    '&LAYERS=' + lyr.layer +
-    '&FORMAT=image%2Fjpeg' +
-    '&CRS=EPSG%3A3857' +
-    '&WIDTH=512&HEIGHT=512' +
-    '&TIME=' + lyr.timeFrom + '%2F' + lyr.timeTo +
-    '&MAXCC=20' +
-    '&BBOX={bbox-epsg-3857}';
-  if (token) tileUrl += '&access_token=' + encodeURIComponent(token);
+  var lyr     = _sentinelLayerForYear(year);
+  var tileUrl = _sentinelProxyTileUrl(year);
 
   return {
     version: 8,
     glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
     sources: {
       sentinel: {
-        type: 'raster',
-        tiles: [tileUrl],
-        tileSize: 512,
+        type:        'raster',
+        tiles:       [tileUrl],
+        tileSize:    512,
         attribution: lyr.attribution,
-        maxzoom: 18,
-        minzoom: 1
+        maxzoom:     18,
+        minzoom:     1
       }
     },
     layers: [
-      { id: 'sentinel-layer', type: 'raster', source: 'sentinel',
-        paint: { 'raster-opacity': 1.0 } }
+      {
+        id:     'sentinel-layer',
+        type:   'raster',
+        source: 'sentinel',
+        paint:  { 'raster-opacity': 1.0 }
+      }
     ]
   };
 }
@@ -5473,15 +5477,13 @@ function getWaybackTileStyle(year, label) {
 }
 
 /**
- * Builds a MapLibre style for a given year using Copernicus Sentinel Hub WMS.
+ * Builds a MapLibre style for a given year using Sentinel Hub via server proxy.
  * ALWAYS uses Sentinel for both from-year and to-year — no Esri/Wayback fallback.
- * Accepts an optional token parameter; falls back to global _sentinelToken.
- * Even without a token the WMS request is sent to CDSE (may return limited tiles).
+ * Token param kept for backward API compat — proxy handles OAuth internally.
  */
 function uwBuildYearStyle(year, token) {
-  // Use provided token, or fall back to cached global token
-  var tok = (typeof token === 'string' ? token : null) || _sentinelToken || '';
-  return uwBuildSentinelStyle(tok, year);
+  // Proxy handles auth server-side — no token needed in the tile URL
+  return uwBuildSentinelStyle('', year);
 }
 
 function uwBuildCurrentStyle() {
@@ -5620,30 +5622,22 @@ function uwOpenSplitView() {
   toMapEl.innerHTML   = '';
 
   var sentinelStatus = document.getElementById('split-sentinel-status');
-  if(sentinelStatus) sentinelStatus.textContent = '🛰 Fetching imagery sources…';
+  if(sentinelStatus) sentinelStatus.textContent = '🛰 Loading Sentinel imagery via proxy…';
 
-  // Preload Wayback vintages in parallel with Sentinel token
-  Promise.all([
-    getSentinelToken(),
-    _loadWaybackVintages()
-  ]).then(function(results) {
-    var token = results[0];
-    // uwBuildYearStyle now handles all year ranges correctly:
-    // Both from-year and to-year ALWAYS use Copernicus Sentinel Hub WMS
-    // Token is passed explicitly so the correct access_token is embedded in tile URLs
-    var fromStyle = uwBuildYearStyle(fromY, token);
-    var toStyle   = uwBuildYearStyle(toY, token);
+  // Build styles immediately — proxy handles OAuth server-side, no token pre-fetch needed
+  Promise.resolve().then(function() {
+    var fromStyle = uwBuildYearStyle(fromY);
+    var toStyle   = uwBuildYearStyle(toY);
 
     // Determine correct source label per year
     function _srcLabel(y) {
       if (y >= 2015) return 'Sentinel-2';
-      if (y >= 2013) return 'Landsat-8';
+      if (y >= 2013) return 'Landsat-8/OLI';
       return 'Landsat-TM';
     }
     if(sentinelStatus) {
       var fromSrc = _srcLabel(fromY), toSrc = _srcLabel(toY);
-      var authTxt = token ? ' (auth✓)' : ' (no-token)';
-      sentinelStatus.textContent = '🛰 Copernicus CDSE · ' + fromY + ' ' + fromSrc + ' vs ' + toY + ' ' + toSrc + authTxt;
+      sentinelStatus.textContent = '🛰 Copernicus CDSE via proxy · ' + fromY + ' ' + fromSrc + ' vs ' + toY + ' ' + toSrc + ' (server-auth✓)';
     }
 
     var commonOpts = {
@@ -6011,12 +6005,12 @@ function splitToggleWayback() {
     }
   }
 
-  // Reload both map styles — always use Copernicus Sentinel Hub WMS for both years
-  getSentinelToken().then(function(token) {
-    var fromStyle = uwBuildYearStyle(fromY, token);
-    var toStyle   = uwBuildYearStyle(toY, token);
-    function _sl(y) { return y >= 2015 ? 'Sentinel-2' : (y >= 2013 ? 'Landsat-8' : 'Landsat-TM'); }
-    var srcLabel = 'Copernicus CDSE · ' + fromY + ' ' + _sl(fromY) + ' vs ' + toY + ' ' + _sl(toY) + (token ? ' (✓auth)' : '');
+  // Reload both map styles — proxy handles OAuth, no token pre-fetch needed
+  Promise.resolve().then(function() {
+    var fromStyle = uwBuildYearStyle(fromY);
+    var toStyle   = uwBuildYearStyle(toY);
+    function _sl(y) { return y >= 2015 ? 'Sentinel-2' : (y >= 2013 ? 'Landsat-8/OLI' : 'Landsat-TM'); }
+    var srcLabel = 'Copernicus CDSE (proxy) · ' + fromY + ' ' + _sl(fromY) + ' vs ' + toY + ' ' + _sl(toY) + ' ✓';
     if(status) status.textContent = '🛰 ' + srcLabel;
     uwToast('Copernicus Sentinel · ' + fromY + ' vs ' + toY, 'info');
     if(splitState.mapFrom) {

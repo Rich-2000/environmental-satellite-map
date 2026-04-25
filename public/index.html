@@ -2887,6 +2887,7 @@ function syncYear(y,skipTiles=false){
     if (_useGIBS) {
       var _gibsDate = _gibsDateForYear(_tileYear);
       // GIBS WMTS WebMercator — real dated 250m MODIS true color
+      // maxzoom:9 = MapLibre overscales at z10+ instead of requesting missing tiles
       _tiles = ['https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/'
         + 'MODIS_Terra_CorrectedReflectance_TrueColor/default/'
         + _gibsDate
@@ -2903,7 +2904,9 @@ function syncYear(y,skipTiles=false){
     map.addSource('nasa-tc',{type:'raster',
       tiles: _tiles,
       tileSize:256, attribution: _attr,
-      maxzoom: _useGIBS ? 9 : 19, minzoom:1
+      // maxzoom:9 for GIBS — tells MapLibre to overscale z9 tiles at higher zooms
+      // instead of requesting non-existent z10+ tiles (which would 404)
+      maxzoom: _useGIBS ? 9 : 19, minzoom: _useGIBS ? 2 : 1
     });
     map.addLayer({id:'nasa-tc-lyr',type:'raster',source:'nasa-tc',paint:{'raster-opacity':LS.satellite?0.55:0}});
 
@@ -5431,16 +5434,20 @@ function checkSentinelHealth() {
  */
 function _gibsDateForYear(year) {
   var y = Math.min(parseInt(year, 10), new Date().getFullYear());
-  if (y < 2000) y = 2000;
   var now = new Date();
   var thisYear = now.getFullYear();
+
   if (y >= thisYear) {
     // Use a date 10 days ago to ensure tile is available
     var safe = new Date(now.getTime() - 10 * 86400000);
     return safe.toISOString().split('T')[0];
   }
-  // Feb 15 = peak dry season over Accra (harmattan, minimal cloud)
-  return y + '-02-15';
+  // MODIS Terra CorrectedReflectance_TrueColor archive starts 2000-02-24.
+  // Use January 15 as target (peak harmattan/dry season over Ghana = lowest cloud cover).
+  // For year 2000, shift to March 1 (first reliably available date after satellite launch).
+  if (y < 2000) return '1999-12-31'; // sentinel value — handled by useMODIS check
+  if (y === 2000) return '2000-03-01'; // first confirmed available MODIS tile
+  return y + '-01-15'; // Jan 15 — driest period, best cloud-free imagery for West Africa
 }
 
 /**
@@ -5455,20 +5462,16 @@ function _buildGIBSStyle(year) {
   var date = _gibsDateForYear(year);
   var y = parseInt(year, 10);
 
-  // NASA GIBS WMTS in WebMercator (EPSG:3857) — works with MapLibre's default projection
-  // Layer: MODIS_Terra_CorrectedReflectance_TrueColor (250m natural color)
-  var gibsUrl = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/'
-    + 'MODIS_Terra_CorrectedReflectance_TrueColor/default/'
-    + date
-    + '/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg';
+  // MODIS_Terra_CorrectedReflectance_TrueColor: available 2000-02-24 to present
+  // Tile URL format: /wmts/epsg3857/best/{layer}/default/{date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg
+  // NOTE: GIBS uses {z}/{y}/{x} order (row/col), NOT {z}/{x}/{y}
+  // NOTE: Tiles only exist at zoom 0–9. MapLibre will overscale z9 tiles for z10+ (fine).
+  // NOTE: Ocean tiles (Gulf of Guinea near 0°N,0°E) 404 — this is expected, MapLibre handles gracefully.
 
-  // For years with Landsat (pre-MODIS era or better resolution): use Landsat via GIBS
-  // MODIS_Terra_CorrectedReflectance_TrueColor: 2000-02-24 to present
-  // For 1984-1999 use Esri only (best available)
   var useMODIS = y >= 2000;
 
   if (!useMODIS) {
-    // Pre-2000: Esri World Imagery is the best freely available source
+    // Pre-2000: Esri World Imagery only (no GIBS MODIS data before 2000-02-24)
     return {
       version: 8,
       glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
@@ -5477,18 +5480,22 @@ function _buildGIBSStyle(year) {
           type: 'raster',
           tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
           tileSize: 256,
-          attribution: 'Esri World Imagery · Historical ~' + year,
+          attribution: 'Esri World Imagery · ~' + year,
           maxzoom: 19, minzoom: 1
         }
       },
       layers: [
         { id: 'esri-base-layer', type: 'raster', source: 'esri_base',
-          paint: { 'raster-opacity': 1.0,
-                   'raster-hue-rotate': (y < 1995) ? 5 : 0,
-                   'raster-saturation': (y < 1995) ? -0.15 : 0 } }
+          paint: { 'raster-opacity': 1.0 } }
       ]
     };
   }
+
+  // GIBS WMTS tile URL — {z}/{y}/{x} is the correct order for GIBS (not {z}/{x}/{y})
+  var gibsUrl = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/'
+    + 'MODIS_Terra_CorrectedReflectance_TrueColor/default/'
+    + date
+    + '/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg';
 
   return {
     version: 8,
@@ -5506,25 +5513,29 @@ function _buildGIBSStyle(year) {
         tiles: [gibsUrl],
         tileSize: 256,
         attribution: 'NASA GIBS · MODIS Terra · ' + date,
-        maxzoom: 9,  // MODIS max native resolution
-        minzoom: 1
+        // maxzoom:9 tells MapLibre to stop requesting new tiles beyond z9 and overscale instead.
+        // This prevents 404s at higher zoom levels while still showing the imagery scaled up.
+        maxzoom: 9,
+        minzoom: 2
       }
     },
     layers: [
-      // Esri base gives high-zoom detail
+      // Esri base layer — always present, provides high-zoom detail and ocean coverage
       { id: 'esri-base-layer', type: 'raster', source: 'esri_base',
         paint: { 'raster-opacity': 1.0 } },
-      // MODIS overlaid at low/medium zoom — this is what gives year differentiation
-      // Higher opacity when zoomed out (MODIS is more accurate there), fades at high zoom
+      // MODIS overlay — real dated satellite imagery, fades as zoom increases
+      // At z≤9 the MODIS is crisp and dated. At z>9 it overscales (blurry but dated).
       { id: 'gibs-modis-layer', type: 'raster', source: 'gibs_modis',
         paint: {
           'raster-opacity': ['interpolate', ['linear'], ['zoom'],
-            4, 1.0,    // At z4: full MODIS (pure dated satellite)
-            7, 0.92,   // At z7: mostly MODIS
-            8, 0.75,   // At z8: blended
-            9, 0.5     // At z9: half MODIS / half Esri detail
+            3, 1.0,   // z3 and below: pure MODIS
+            7, 0.97,  // z7: almost pure MODIS
+            9, 0.88,  // z9: mostly MODIS (at its native resolution)
+           11, 0.70,  // z11: blended (MODIS overscaling, Esri adds detail)
+           13, 0.45,  // z13: mostly Esri detail
+           15, 0.20   // z15+: mainly Esri, faint MODIS tint for temporal context
           ],
-          'raster-fade-duration': 200
+          'raster-fade-duration': 300
         }
       }
     ]
@@ -5906,19 +5917,28 @@ function uwOpenSplitView() {
     splitState.mapTo.on('move',   syncTF);
 
     // ── Tile error detection — if Sentinel proxy returns 500s, swap to GIBS ──
+    // NOTE: GIBS MODIS tiles return 404 for ocean areas (Gulf of Guinea near 0°N,0°E)
+    // — this is EXPECTED and harmless (MapLibre just shows nothing for those tiles).
+    // We only want to swap to GIBS if Sentinel is returning server errors (5xx).
     if (imgSource === 'sentinel') {
       var _tileErrors = 0;
       var _tileErrorSwapped = false;
 
       function _onTileError(e) {
         if (_tileErrorSwapped) return;
+        // Only count 5xx server errors — not 404s (missing tiles are normal for sparse archives)
+        var status = e && e.error && (e.error.status || e.error.statusCode || 0);
+        var is5xx = status >= 500 && status < 600;
+        // Also detect via URL pattern — 500 from our proxy is a real error
+        var isSentinelProxy = e && e.tile && e.tile.url && e.tile.url.indexOf('sentinel-tile-proxy') >= 0;
+        if (!is5xx && !isSentinelProxy) return; // ignore 404s and non-sentinel errors
         _tileErrors++;
         if (_tileErrors >= 3) {
-          // Multiple tile failures — switch to GIBS
+          // Multiple 5xx failures from Sentinel proxy — switch to GIBS
           _tileErrorSwapped = true;
           _sentinelHealthy = false;
-          console.warn('[SplitView] Sentinel tiles failing, switching to NASA GIBS fallback');
-          uwToast('ℹ Sentinel tiles unavailable — switching to NASA GIBS imagery', 'info');
+          console.warn('[SplitView] Sentinel proxy returning 5xx — switching to NASA GIBS fallback');
+          uwToast('ℹ Sentinel credentials issue — switching to NASA GIBS imagery', 'info');
           if(sentinelStatus) {
             var _gbSrc = function(y) { return y >= 2000 ? 'MODIS Terra · NASA GIBS' : 'Esri Archive'; };
             sentinelStatus.textContent = '🛰 NASA GIBS · ' + fromY + ' ' + _gbSrc(fromY) + ' vs ' + toY + ' ' + _gbSrc(toY) + ' (auto-fallback)';

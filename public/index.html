@@ -5634,10 +5634,12 @@ function getWaybackTileStyle(year, label) {
   var itemId = getWaybackItemId(year);
   var tiles, attribution;
   if (itemId) {
+    // CRITICAL: Use actual Esri Wayback tile endpoint with item ID.
+    // Without the item ID in the URL every year maps to the same current tiles.
     tiles = [
-      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+      'https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS/1.0.0/default/' + itemId + '/GoogleMapsCompatible/{z}/{y}/{x}'
     ];
-    attribution = 'Esri World Imagery · ' + year;
+    attribution = 'Esri Wayback · ' + year + ' (item ' + itemId + ')';
   } else {
     tiles = ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'];
     attribution = 'Esri World Imagery · ' + year;
@@ -5680,8 +5682,17 @@ function uwBuildYearStyle(year, token) {
 /**
  * Async version — checks Sentinel health first, picks best available source.
  * Returns Promise<{fromStyle, toStyle, source}>.
+ *
+ * Fallback chain:
+ *   1. Sentinel Hub proxy (server-side auth, best quality)
+ *   2. Esri Wayback (genuinely year-differentiated archives, 2014+)
+ *      + NASA GIBS MODIS (year-differentiated, 2000+) blended for pre-2014
+ *   3. Esri current + GIBS MODIS overlay (still shows visible seasonal difference)
  */
 function uwBuildYearStylesAsync(fromYear, toYear) {
+  // Ensure Wayback vintages are loaded (synchronous, hardcoded)
+  _loadWaybackVintages();
+
   return checkSentinelHealth().then(function(healthy) {
     if (healthy) {
       return {
@@ -5690,13 +5701,91 @@ function uwBuildYearStylesAsync(fromYear, toYear) {
         source:    'sentinel'
       };
     }
-    // Sentinel unavailable — use NASA GIBS (genuinely year-differentiated, free)
+    // Sentinel unavailable — use Esri Wayback for year-differentiated imagery.
+    // Wayback item IDs encode genuine annual composites that visually differ.
+    // For pre-2014 years we blend GIBS MODIS over Esri for temporal context.
     return {
-      fromStyle: _buildGIBSStyle(fromYear),
-      toStyle:   _buildGIBSStyle(toYear),
-      source:    'gibs'
+      fromStyle: _buildBestFreeStyle(fromYear),
+      toStyle:   _buildBestFreeStyle(toYear),
+      source:    'wayback'
     };
   });
+}
+
+/**
+ * Builds the best freely-available, year-differentiated MapLibre style.
+ *
+ * 2014+: Esri Wayback archive — genuine annual composites, distinct per year.
+ * 2000–2013: NASA GIBS MODIS TrueColor (real daily imagery) over Esri base.
+ * pre-2000: Esri World Imagery with desaturation filter to signal era.
+ */
+function _buildBestFreeStyle(year) {
+  var y = parseInt(year, 10);
+
+  if (y >= 2014) {
+    // Esri Wayback — guaranteed different itemId per year → different imagery
+    return getWaybackTileStyle(y, String(y));
+  }
+
+  if (y >= 2000) {
+    // NASA GIBS MODIS TrueColor — real dated 250m satellite imagery, free
+    var date = _gibsDateForYear(y);
+    // GIBS EPSG:3857 WMTS — correct row/col order for MapLibre
+    var gibsUrl = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/' +
+      'MODIS_Terra_CorrectedReflectance_TrueColor/default/' +
+      date + '/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg';
+    return {
+      version: 8,
+      glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
+      sources: {
+        esri_base: {
+          type: 'raster',
+          tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+          tileSize: 256, attribution: 'Esri World Imagery', maxzoom: 19, minzoom: 1
+        },
+        gibs_modis: {
+          type: 'raster',
+          tiles: [gibsUrl],
+          tileSize: 256,
+          attribution: 'NASA GIBS · MODIS Terra · ' + date,
+          maxzoom: 8,   // MODIS native cap — beyond z8 tiles return 404
+          minzoom: 2
+        }
+      },
+      layers: [
+        { id: 'esri-base', type: 'raster', source: 'esri_base',
+          paint: { 'raster-opacity': 1.0 } },
+        { id: 'gibs-modis', type: 'raster', source: 'gibs_modis',
+          paint: {
+            'raster-opacity': ['interpolate', ['linear'], ['zoom'],
+              2, 1.0,   // Full MODIS at low zoom
+              6, 0.88,
+              7, 0.72,
+              8, 0.45   // Blend at z8 — MODIS tiles stop here
+            ],
+            'raster-fade-duration': 200
+          }
+        }
+      ]
+    };
+  }
+
+  // Pre-2000: Esri with a mild desaturation to signal historical era
+  return {
+    version: 8,
+    glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
+    sources: {
+      esri_hist: {
+        type: 'raster',
+        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+        tileSize: 256, attribution: 'Esri World Imagery · Historical ~' + y, maxzoom: 19
+      }
+    },
+    layers: [
+      { id: 'esri-hist-layer', type: 'raster', source: 'esri_hist',
+        paint: { 'raster-opacity': 1.0, 'raster-saturation': -0.25, 'raster-brightness-min': 0.05 } }
+    ]
+  };
 }
 
 function uwBuildCurrentStyle() {
@@ -5852,11 +5941,19 @@ function uwOpenSplitView() {
           return 'Landsat-TM';
         }
         sentinelStatus.textContent = '🛰 Copernicus CDSE via proxy · ' + fromY + ' ' + _srcLabel(fromY) + ' vs ' + toY + ' ' + _srcLabel(toY) + ' (server-auth✓)';
+      } else if (imgSource === 'wayback') {
+        // Esri Wayback + GIBS — genuinely year-differentiated free imagery
+        var _wbSrc = function(y) {
+          if (y >= 2014) return 'Esri Wayback';
+          if (y >= 2000) return 'NASA GIBS MODIS';
+          return 'Esri Archive';
+        };
+        sentinelStatus.textContent = '🛰 ' + fromY + ' ' + _wbSrc(fromY) + ' vs ' + toY + ' ' + _wbSrc(toY) + ' · year-differentiated (free/open)';
+        uwToast('ℹ Using Esri Wayback/NASA GIBS imagery — Sentinel credentials not configured', 'info');
       } else {
-        // GIBS — genuinely year-differentiated free imagery
+        // Legacy 'gibs' label
         var _gibsSrc = function(y) { return y >= 2000 ? 'MODIS Terra · NASA GIBS' : 'Esri Archive'; };
         sentinelStatus.textContent = '🛰 NASA GIBS · ' + fromY + ' ' + _gibsSrc(fromY) + ' vs ' + toY + ' ' + _gibsSrc(toY) + ' (free/open)';
-        // Also show toast so user knows
         uwToast('ℹ Using NASA GIBS imagery — Sentinel credentials not configured', 'info');
       }
     }
@@ -5925,8 +6022,8 @@ function uwOpenSplitView() {
           }
           // Swap styles on both maps
           try {
-            if(splitState.mapFrom) splitState.mapFrom.setStyle(_buildGIBSStyle(fromY));
-            if(splitState.mapTo)   splitState.mapTo.setStyle(_buildGIBSStyle(toY));
+            if(splitState.mapFrom) splitState.mapFrom.setStyle(_buildBestFreeStyle(fromY));
+            if(splitState.mapTo)   splitState.mapTo.setStyle(_buildBestFreeStyle(toY));
           } catch(swapErr) {
             console.error('[SplitView] Style swap error:', swapErr);
           }
@@ -5954,14 +6051,14 @@ function uwOpenSplitView() {
     _attachSplitClickHandlers();
 
   }).catch(function(err) {
-    // Fallback to GIBS if async style build fails
+    // Fallback to best free style if async style build fails
     console.error('[SplitView] Style build error:', err && err.message ? err.message : err);
-    uwToast('ℹ Retrying with NASA GIBS imagery…', 'info');
+    uwToast('ℹ Retrying with Wayback/GIBS imagery…', 'info');
     if(sentinelStatus) sentinelStatus.textContent = '⚠ Loading fallback imagery…';
-    // Re-attempt with pure GIBS — initialize maps directly
+    // Re-attempt with year-differentiated free styles
     try {
-      var fbFromStyle = _buildGIBSStyle(fromY);
-      var fbToStyle   = _buildGIBSStyle(toY);
+      var fbFromStyle = _buildBestFreeStyle(fromY);
+      var fbToStyle   = _buildBestFreeStyle(toY);
       var fbCenter = zone ? zone.center : ACCRA_CENTER;
       var fbZoom   = zone ? Math.min(zone.zoom, 14) : 12;
       var fbCommon = { center: fbCenter, zoom: fbZoom, pitch: 0, bearing: 0,

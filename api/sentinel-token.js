@@ -1,16 +1,12 @@
 /**
- * sentinel-token.js — v3 PRODUCTION
+ * api/sentinel-token.js — v4 PRODUCTION
  * ═══════════════════════════════════════════════════════════════════
  * Fetches a Copernicus Data Space (CDSE) OAuth2 token.
  *
- * FIX v3: Accept GET requests in addition to POST.
- *   Browsers visiting the URL directly (e.g. for debugging) use GET.
- *   Old v2 only allowed POST → returned 405 "Method not allowed" to
- *   the health-check URL typed into the browser address bar.
- *   Both methods now return { access_token, expires_in }.
- *
- * The token is used by the browser only for diagnostic purposes.
- * All actual tile fetching is done server-side in sentinel-tile-proxy.js.
+ * v4 changes:
+ *   - Accepts GET, POST, OPTIONS
+ *   - GET is the primary method (browser fetch now uses GET)
+ *   - Adds proper cache headers so browser won't hammer this endpoint
  * ═══════════════════════════════════════════════════════════════════
  */
 
@@ -21,7 +17,6 @@ export default async function handler(req, res) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // Accept both GET (browser URL bar / health check) and POST (app fetch)
   if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -57,17 +52,19 @@ export default async function handler(req, res) {
       return res.status(tokenRes.status).json({
         error:  'Token fetch failed',
         detail: errText.slice(0, 300),
-        hint:   'Check that your SENTINEL_CLIENT_ID and SENTINEL_CLIENT_SECRET are correct and not expired. ' +
-                'Regenerate at: dataspace.copernicus.eu → Sign In → User Settings → OAuth Clients'
+        hint:   'Check SENTINEL_CLIENT_ID and SENTINEL_CLIENT_SECRET. Regenerate at: dataspace.copernicus.eu → Sign In → User Settings → OAuth Clients'
       });
     }
 
     const data = await tokenRes.json();
 
+    // Cache the token for 25 minutes (expires_in is typically 1800s = 30 min)
+    const cacheSeconds = Math.max(60, (data.expires_in || 1800) - 300);
+    res.setHeader('Cache-Control', `private, max-age=${cacheSeconds}`);
+
     return res.status(200).json({
       access_token: data.access_token,
       expires_in:   data.expires_in,
-      // Note: no instance_id needed — Process API uses OAuth token directly
     });
 
   } catch (err) {

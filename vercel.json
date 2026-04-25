@@ -4,10 +4,6 @@
     {
       "source": "/api/sentinel-tile-proxy/:z/:x/:y",
       "destination": "/api/sentinel-tile-proxy?z=:z&x=:x&y=:y"
-    },
-    {
-      "source": "/api/(.*)",
-      "destination": "/api/$1"
     }
   ],
   "headers": [
@@ -17,7 +13,7 @@
         { "key": "Access-Control-Allow-Origin",  "value": "*" },
         { "key": "Access-Control-Allow-Methods", "value": "GET, OPTIONS" },
         { "key": "Access-Control-Allow-Headers", "value": "Content-Type" },
-        { "key": "Cache-Control", "value": "public, max-age=86400, stale-while-revalidate=604800" }
+        { "key": "Cache-Control",                "value": "public, max-age=604800, stale-while-revalidate=2592000" }
       ]
     },
     {
@@ -25,8 +21,7 @@
       "headers": [
         { "key": "Access-Control-Allow-Origin",  "value": "*" },
         { "key": "Access-Control-Allow-Methods", "value": "GET, OPTIONS" },
-        { "key": "Access-Control-Allow-Headers", "value": "Content-Type" },
-        { "key": "Cache-Control", "value": "public, max-age=86400, stale-while-revalidate=604800" }
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type" }
       ]
     },
     {
@@ -38,10 +33,10 @@
       ]
     },
     {
-      "source": "/api/(.*)",
+      "source": "/api/claude-proxy",
       "headers": [
         { "key": "Access-Control-Allow-Origin",  "value": "*" },
-        { "key": "Access-Control-Allow-Methods", "value": "GET, POST, OPTIONS" },
+        { "key": "Access-Control-Allow-Methods", "value": "POST, OPTIONS" },
         { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization" }
       ]
     }

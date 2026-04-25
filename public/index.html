@@ -5270,92 +5270,100 @@ function getSentinelToken() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// SENTINEL HUB — Production proxy-based implementation
+// SATELLITE IMAGERY ENGINE — v7 PRODUCTION
 // ─────────────────────────────────────────────────────────────────────────────
-// WHY PROXY TILES (not direct WMS):
-//   1. CDSE WMS requires the OAuth client_id in the URL path as instance ID:
-//      https://sh.dataspace.copernicus.eu/ogc/wms/{instance_id}
-//      Hitting the generic endpoint (no instance_id) returns HTTP 404.
-//   2. MapLibre cannot set Authorization: Bearer headers on tile requests.
-//      Passing access_token as a query param triggers CORS preflight errors
-//      on sh.dataspace.copernicus.eu for cross-origin Vercel domains.
-//   3. Our Vercel function /api/sentinel-tile-proxy handles auth server-side,
-//      constructs the correct WMS URL with instance path, and streams the
-//      JPEG tile back — eliminating all CORS and auth issues.
 //
-// Layer names — VERIFIED against CDSE GetCapabilities (April 2026):
-//   Sentinel-2  (2015–present):  TRUE-COLOR
-//   Landsat-8/9 (2013–2014):     LANDSAT-OLI-L2-TRUE-COLOR
-//   Landsat TM  (pre-2013):      LANDSAT-TM-L1-TRUE-COLOR
-//   NOTE: Old names LANDSAT-8-TRUE-COLOR / LANDSAT-TM-TRUE-COLOR are
-//         DEPRECATED and return 404 on the current CDSE endpoint.
+// THREE-TIER ARCHITECTURE (in priority order):
+//
+// TIER 1 — Copernicus CDSE Process API via /api/sentinel-tile-proxy
+//   • Sentinel-2 L2A  (2015–present):  10m true-colour, 5-day revisit
+//   • Landsat-8/OLI   (2013–2014):     30m true-colour
+//   • Landsat-TM      (pre-2013):      30m true-colour
+//   • Server-side OAuth2 — no CORS issues. Requires SENTINEL_CLIENT_ID +
+//     SENTINEL_CLIENT_SECRET env vars in Vercel.
+//   • Health-checked against a real Accra tile (z=10, x=511, y=496).
+//     X-No-Data responses are treated as UNHEALTHY (no credentials / empty tile).
+//
+// TIER 2 — Esri Living Atlas Wayback via /api/wayback-proxy
+//   • Genuine annual composites with unique item IDs per year (2014–2025).
+//   • CORS fix: wayback.maptiles.arcgis.com doesn't send CORS headers.
+//     All requests route through /api/wayback-proxy which adds them.
+//   • Falls back to NASA GIBS MODIS for pre-2014 years.
+//
+// TIER 3 — NASA GIBS MODIS TrueColor (free, no auth, daily archive 2000+)
+//   • EPSG:3857 WMTS — correct row/col order for MapLibre.
+//   • 250m resolution. Capped at z=9 (native MODIS max).
+//   • Real dated imagery — year is differentiated by date parameter.
+//
+// TIER 4 — Esri World Imagery (pre-2000 or final fallback)
+//   • Not year-differentiated, but always works — last resort.
+//
+// WHY NOT DIRECT WMS:
+//   MapLibre cannot add Authorization headers to raster tile requests.
+//   Passing tokens as query params on sh.dataspace.copernicus.eu triggers
+//   CORS preflights that fail from Vercel domains.
+//   Server-side proxy eliminates both problems.
 // ═════════════════════════════════════════════════════════════════════════════
 
 /**
- * Returns the correct CDSE layer name and attribution for a given year.
- * Uses current verified Copernicus Data Space Ecosystem layer identifiers.
+ * Returns the CDSE dataset type, evalscript selector, and attribution for a year.
+ * Matches what /api/sentinel-tile-proxy expects.
  */
 function _sentinelLayerForYear(year) {
   var y = parseInt(year, 10);
   if (y >= 2015) {
     return {
-      layer:       'TRUE-COLOR',
-      timeFrom:    y + '-01-01',
-      timeTo:      y + '-12-31',
-      attribution: 'Copernicus Sentinel-2 · ESA · ' + y
+      dataset:     'sentinel-2-l2a',
+      label:       'Sentinel-2 L2A',
+      attribution: 'Copernicus Sentinel-2 · ESA · ' + y,
+      maxCC:       30
     };
   } else if (y >= 2013) {
     return {
-      layer:       'LANDSAT-OLI-L2-TRUE-COLOR',
-      timeFrom:    y + '-01-01',
-      timeTo:      y + '-12-31',
-      attribution: 'Copernicus Landsat-8/OLI · USGS · ' + y
+      dataset:     'landsat-ot-l2',
+      label:       'Landsat-8 OLI L2',
+      attribution: 'Copernicus Landsat-8/OLI · USGS · ' + y,
+      maxCC:       40
     };
   } else {
-    // Landsat 4-5 TM archive (1984–2012)
     return {
-      layer:       'LANDSAT-TM-L1-TRUE-COLOR',
-      timeFrom:    y + '-01-01',
-      timeTo:      y + '-12-31',
-      attribution: 'Copernicus Landsat-TM · USGS · ' + y
+      dataset:     'landsat-tm-l1',
+      label:       'Landsat-TM L1',
+      attribution: 'Copernicus Landsat-TM · USGS · ' + y,
+      maxCC:       50
     };
   }
 }
 
 /**
- * Builds a MapLibre tile URL that routes through our Vercel proxy.
- * The proxy handles OAuth authentication and constructs the correct
- * CDSE WMS URL with instance ID — no auth needed in the browser URL.
+ * Builds the Vercel proxy URL for a Sentinel tile.
+ * CRITICAL: All params as query strings — Vercel path rewrites silently drop
+ * extra query params from path-segment URLs.
  *
- * Proxy endpoint: GET /api/sentinel-tile-proxy
- * Params: layer, year, bbox, width, height
+ * The proxy (api/sentinel-tile-proxy.js) handles:
+ *   1. OAuth2 client_credentials grant to CDSE
+ *   2. Token caching (30 min)
+ *   3. Calls Process API with correct evalscript for the dataset
+ *   4. Returns PNG tile with CORS headers
  */
 function _sentinelProxyTileUrl(year) {
-  // CRITICAL: Use query params ONLY for z/x/y — NOT path segments.
-  // Vercel rewrites like /api/sentinel-tile-proxy/:z/:x/:y → ?z=:z&x=:x&y=:y
-  // silently DROP all other query params (year=, width=, height=).
-  // Query-param-only URLs bypass Vercel rewrites entirely and keep ALL params.
   return '/api/sentinel-tile-proxy' +
     '?z={z}&x={x}&y={y}' +
-    '&year='  + encodeURIComponent(year) +
+    '&year=' + encodeURIComponent(String(parseInt(year, 10))) +
     '&width=512&height=512';
 }
 
-/**
- * Returns a MapLibre tile URL array for CDSE Sentinel imagery.
- * Always uses the server-side proxy — token parameter kept for API compat.
- */
+/** Kept for API compat — token not used in proxy URL */
 function sentinelWMSTiles(token, year) {
   return [_sentinelProxyTileUrl(year)];
 }
 
 /**
  * Builds a complete MapLibre GL style for Sentinel Hub imagery via proxy.
- * BOTH from-year and to-year always use Sentinel — no Esri/Wayback fallback.
  *
- * @param {string} token   OAuth2 access_token (kept for API compat, not used in URL)
- * @param {number} year    Year of imagery to fetch
- * @returns {Object}       MapLibre GL style object
+ * @param {string} token  OAuth2 access_token (unused — proxy handles auth)
+ * @param {number} year   Year of imagery (1984–present)
+ * @returns {Object}      MapLibre GL style object
  */
 function uwBuildSentinelStyle(token, year) {
   var lyr     = _sentinelLayerForYear(year);
@@ -5363,7 +5371,7 @@ function uwBuildSentinelStyle(token, year) {
 
   return {
     version: 8,
-    glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
+    glyphs:  'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
     sources: {
       sentinel: {
         type:        'raster',
@@ -5375,17 +5383,15 @@ function uwBuildSentinelStyle(token, year) {
         maxzoom:     17
       }
     },
-    layers: [
-      {
-        id:     'sentinel-layer',
-        type:   'raster',
-        source: 'sentinel',
-        paint:  {
-          'raster-opacity':   1.0,
-          'raster-fade-duration': 300
-        }
+    layers: [{
+      id:     'sentinel-layer',
+      type:   'raster',
+      source: 'sentinel',
+      paint:  {
+        'raster-opacity':       1.0,
+        'raster-fade-duration': 300
       }
-    ]
+    }]
   };
 }
 
@@ -5413,10 +5419,11 @@ function checkSentinelHealth() {
   if (_sentinelHealthy !== null) return Promise.resolve(_sentinelHealthy);
   if (_sentinelHealthPromise) return _sentinelHealthPromise;
 
-  // Test tile: z=10, x=968, y=490 — this is directly over Accra CBD.
+  // Test tile: z=10, x=511, y=496 — verified tile directly over Accra CBD (-0.187, 5.603).
   // Using an actual Accra tile ensures we get real image data, not a transparent
   // no-data tile (which would falsely pass the old health check).
-  var testUrl = '/api/sentinel-tile-proxy?z=10&x=968&y=490&year=2022&width=64&height=64';
+  // Tile math: lng=-0.187 → x=511, lat=5.6037 → y=496 at z=10.
+  var testUrl = '/api/sentinel-tile-proxy?z=10&x=511&y=496&year=2022&width=64&height=64';
   _sentinelHealthPromise = fetch(testUrl, { method: 'GET' })
     .then(function(r) {
       // CRITICAL FIX: X-No-Data means no imagery for this tile — proxy is up
@@ -5683,53 +5690,72 @@ function getWaybackTileStyle(year, label) {
 }
 
 /**
- * Builds a MapLibre style for a given year.
- * Uses Sentinel proxy if healthy, otherwise NASA GIBS MODIS (real historical imagery).
- * Token param kept for backward API compat.
+ * Synchronous best-guess year style (used when health state is already known).
+ * Called from syncYear() and other non-async contexts.
  */
 function uwBuildYearStyle(year, token) {
-  // When called synchronously (before health check), default to GIBS
-  // The split view init uses the async version below
   if (_sentinelHealthy === true) {
     return uwBuildSentinelStyle('', year);
   }
-  // Use NASA GIBS as primary free fallback — real dated satellite imagery
-  return _buildGIBSStyle(year);
+  return _buildBestFreeStyle(year);
 }
 
 /**
- * Async version — checks Sentinel health first, picks best available source.
- * Returns Promise<{fromStyle, toStyle, source}>.
+ * ASYNC — Main entry point for split view.
+ * Runs the full health check then picks the best available source.
  *
- * Fallback chain:
- *   1. Sentinel Hub proxy (server-side auth, best quality)
- *   2. Esri Wayback (genuinely year-differentiated archives, 2014+)
- *      + NASA GIBS MODIS (year-differentiated, 2000+) blended for pre-2014
- *   3. Esri current + GIBS MODIS overlay (still shows visible seasonal difference)
+ * Returns Promise<{fromStyle, toStyle, source, fromLabel, toLabel}>
+ *
+ * source values: 'sentinel' | 'wayback' | 'gibs'
  */
 function uwBuildYearStylesAsync(fromYear, toYear) {
-  // Ensure Wayback vintages are loaded (synchronous, hardcoded)
-  _loadWaybackVintages();
+  _loadWaybackVintages(); // synchronous, hardcoded — ensures vintages are ready
 
-  return checkSentinelHealth().then(function(healthy) {
-    if (healthy) {
-      return {
-        fromStyle: uwBuildSentinelStyle('', fromYear),
-        toStyle:   uwBuildSentinelStyle('', toYear),
-        source:    'sentinel'
-      };
-    }
-    // Sentinel unavailable — use Esri Wayback for year-differentiated imagery.
-    // Wayback item IDs encode genuine annual composites that visually differ.
-    // For pre-2014 years we blend GIBS MODIS over Esri for temporal context.
-    return {
-      fromStyle: _buildBestFreeStyle(fromYear),
-      toStyle:   _buildBestFreeStyle(toYear),
-      source:    'wayback'
-    };
+  // Race the health check against a 6 s timeout so slow CDSE never hangs the UI
+  var timeoutPromise = new Promise(function(resolve) {
+    setTimeout(function() { resolve(false); }, 6000);
   });
-}
 
+  return Promise.race([checkSentinelHealth(), timeoutPromise])
+    .then(function(healthy) {
+      if (healthy) {
+        var fromLyr = _sentinelLayerForYear(fromYear);
+        var toLyr   = _sentinelLayerForYear(toYear);
+        return {
+          fromStyle: uwBuildSentinelStyle('', fromYear),
+          toStyle:   uwBuildSentinelStyle('', toYear),
+          source:    'sentinel',
+          fromLabel: fromLyr.label + ' · ' + fromYear,
+          toLabel:   toLyr.label   + ' · ' + toYear
+        };
+      }
+
+      // Sentinel unavailable — use best free year-differentiated source
+      function _freeLabel(y) {
+        if (y >= 2014) return 'Esri Wayback ' + y;
+        if (y >= 2000) return 'NASA GIBS MODIS ' + y;
+        return 'Esri Archive ~' + y;
+      }
+      return {
+        fromStyle: _buildBestFreeStyle(fromYear),
+        toStyle:   _buildBestFreeStyle(toYear),
+        source:    'wayback',
+        fromLabel: _freeLabel(fromYear),
+        toLabel:   _freeLabel(toYear)
+      };
+    })
+    .catch(function(err) {
+      console.warn('[SatEngine] Style build failed:', err && err.message);
+      // Final fallback — always works, always shows something
+      return {
+        fromStyle: _buildBestFreeStyle(fromYear),
+        toStyle:   _buildBestFreeStyle(toYear),
+        source:    'gibs',
+        fromLabel: 'GIBS/Esri ' + fromYear,
+        toLabel:   'GIBS/Esri ' + toYear
+      };
+    });
+}
 /**
  * Builds the best freely-available, year-differentiated MapLibre style.
  *
@@ -5953,25 +5979,20 @@ function uwOpenSplitView() {
     // Update status chip with actual source used
     if(sentinelStatus) {
       if (imgSource === 'sentinel') {
-        function _srcLabel(y) {
-          if (y >= 2015) return 'Sentinel-2';
-          if (y >= 2013) return 'Landsat-8/OLI';
-          return 'Landsat-TM';
-        }
-        sentinelStatus.textContent = '🛰 Copernicus CDSE via proxy · ' + fromY + ' ' + _srcLabel(fromY) + ' vs ' + toY + ' ' + _srcLabel(toY) + ' (server-auth✓)';
+        sentinelStatus.textContent = '🛰 ' + (styles.fromLabel||'Sentinel-2 '+fromY) + '  ◀▶  ' + (styles.toLabel||'Sentinel-2 '+toY) + ' · server-auth ✓';
+        sentinelStatus.style.borderColor = 'rgba(6,201,232,.5)';
+        sentinelStatus.style.color = 'var(--accent)';
       } else if (imgSource === 'wayback') {
-        // Esri Wayback (via /api/wayback-proxy) + GIBS — genuinely year-differentiated free imagery
-        var _wbSrc = function(y) {
-          if (y >= 2014) return 'Esri Wayback (proxy)';
-          if (y >= 2000) return 'NASA GIBS MODIS';
-          return 'Esri Archive';
-        };
-        sentinelStatus.textContent = '🛰 ' + fromY + ' ' + _wbSrc(fromY) + ' vs ' + toY + ' ' + _wbSrc(toY) + ' · year-differentiated (CORS-safe)';
+        // Esri Wayback (via /api/wayback-proxy) — genuinely year-differentiated
+        sentinelStatus.textContent = '🛰 ' + (styles.fromLabel||'Wayback '+fromY) + '  ◀▶  ' + (styles.toLabel||'Wayback '+toY) + ' · CORS-safe proxy';
+        sentinelStatus.style.borderColor = 'rgba(245,158,11,.4)';
+        sentinelStatus.style.color = 'var(--amber)';
         uwToast('ℹ Using Esri Wayback/NASA GIBS imagery — Sentinel credentials not configured or unavailable', 'info');
       } else {
-        // Legacy 'gibs' label
-        var _gibsSrc = function(y) { return y >= 2000 ? 'MODIS Terra · NASA GIBS' : 'Esri Archive'; };
-        sentinelStatus.textContent = '🛰 NASA GIBS · ' + fromY + ' ' + _gibsSrc(fromY) + ' vs ' + toY + ' ' + _gibsSrc(toY) + ' (free/open)';
+        // GIBS-only fallback
+        sentinelStatus.textContent = '🛰 ' + (styles.fromLabel||'GIBS '+fromY) + '  ◀▶  ' + (styles.toLabel||'GIBS '+toY) + ' · free/open';
+        sentinelStatus.style.borderColor = 'rgba(56,189,248,.35)';
+        sentinelStatus.style.color = 'var(--sky)';
         uwToast('ℹ Using NASA GIBS imagery — Sentinel credentials not configured or proxy unavailable', 'info');
       }
     }

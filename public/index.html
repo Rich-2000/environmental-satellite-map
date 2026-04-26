@@ -1379,6 +1379,7 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
   width:100%;
   height:100%;
   overflow:visible;
+  background:#000;
 }
 #split-slider-to-map canvas {
   /* JS will set clip-path here directly */
@@ -2651,9 +2652,10 @@ window.addEventListener('resize',()=>{
  * @param {'tc'|'ndvi'}  - tile product
  */
 function getNASATileDate(year, product){
-  const clampedYear = Math.min(year, 2024);
   const now = new Date();
-  const isCurrentYear = clampedYear >= now.getFullYear();
+  // Clamp to previous year so we always use a year with complete confirmed tiles
+  const clampedYear = Math.min(year, now.getFullYear() - 1);
+  const isCurrentYear = false; // always use known-good historical anchor dates
 
   if(isCurrentYear){
     // Use a date ~8 days ago to stay within confirmed tile availability
@@ -2672,8 +2674,9 @@ function getNASATileDate(year, product){
   } else {
     // Historical: April anchor (dry season, minimal cloud cover for Accra)
     if(product === 'ndvi'){
-      // Closest 8-day DOY to April 6 (DOY 97 = April 7 approx, confirmed tile)
-      return `${clampedYear}-04-06`;
+      // NDVI_8Day valid boundaries: DOY 1,9,17,...,89 (Mar 30),97 (Apr 7),105 (Apr 15)
+      // Use DOY 97 = April 7 — confirmed valid tile date for all years 2000-present
+      return `${clampedYear}-04-07`;
     } else {
       return `${clampedYear}-04-01`;
     }
@@ -2710,7 +2713,7 @@ function initLayers(){
       + _initNDVIDate
       + '/GoogleMapsCompatible_Level9/{z}/{y}/{x}.png'],
     tileSize:256, attribution:'NASA GIBS · MODIS Terra NDVI 8-Day · ' + _initNDVIDate,
-    maxzoom:6, minzoom:1
+    maxzoom:7, minzoom:1
   });
   map.addLayer({id:'ndvi-lyr',type:'raster',source:'nasa-ndvi',paint:{'raster-opacity':LS.ndvi?0.75:0}});
 
@@ -2904,7 +2907,7 @@ function syncYear(y,skipTiles=false){
         + ndviDate
         + '/GoogleMapsCompatible_Level9/{z}/{y}/{x}.png'],
       tileSize:256, attribution:'NASA GIBS · MODIS NDVI · ' + ndviDate,
-      maxzoom:6, minzoom:1
+      maxzoom:7, minzoom:1
     });
     map.addLayer({id:'ndvi-lyr',type:'raster',source:'nasa-ndvi',paint:{'raster-opacity':LS.ndvi?0.75:0}});
   }
@@ -5367,6 +5370,7 @@ function uwBuildSentinelStyle(token, year) {
       }
     },
     layers: [
+      { id: 'bg', type: 'background', paint: { 'background-color': '#0a0a0a' } },
       {
         id:     'sentinel-layer',
         type:   'raster',
@@ -5396,23 +5400,32 @@ var _sentinelHealthPromise = null;
 /**
  * Pings the sentinel proxy with a tiny known-good tile to check if it's working.
  * Caches result for 5 minutes. Returns Promise<boolean>.
+ * Uses X-Sentinel-Status header (v7 proxy) for precise status detection.
  */
 function checkSentinelHealth() {
   if (_sentinelHealthy !== null) return Promise.resolve(_sentinelHealthy);
   if (_sentinelHealthPromise) return _sentinelHealthPromise;
 
-  // Test tile: z=5, x=15, y=15 (a generic tile over West Africa at low zoom)
-  // Correct Accra tile: z=10, x=511, y=496 (lng=-0.187 → x=511, lat=5.6037 → y=496)
+  // Accra tile: z=10, x=511, y=496 (lng=-0.187 → x=511, lat=5.6037 → y=496)
   var testUrl = '/api/sentinel-tile-proxy?z=10&x=511&y=496&year=2022&width=64&height=64';
   _sentinelHealthPromise = fetch(testUrl, { method: 'GET' })
     .then(function(r) {
-      // HEALTH FIX: X-No-Data=true means empty tile (no data for this area/year).
-      // That is NOT a successful imagery response — treat as unhealthy.
+      var sentinelStatus = r.headers.get('x-sentinel-status') || '';
       var noData = r.headers.get('x-no-data') === 'true';
       var ct = r.headers.get('content-type') || '';
-      _sentinelHealthy = r.ok && !noData && ct.indexOf('image/') > -1;
-      console.log('[Sentinel] health check:', _sentinelHealthy ? '✓ OK' : '✗ FAILING (status ' + r.status + ')');
-      // Reset after 5 minutes so it re-checks if credentials are updated
+      // v7 proxy: 'ok' means real imagery was returned
+      // 'no-credentials' | 'auth-failed' | 'no-data' all mean fallback needed
+      if (sentinelStatus === 'ok') {
+        _sentinelHealthy = true;
+      } else if (sentinelStatus === 'no-credentials' || sentinelStatus === 'auth-failed') {
+        _sentinelHealthy = false;
+        console.warn('[Sentinel] health check: ' + sentinelStatus + ' — using free fallback imagery');
+      } else {
+        // Legacy proxy (no X-Sentinel-Status): check content-type and x-no-data
+        _sentinelHealthy = r.ok && !noData && ct.indexOf('image/') > -1;
+      }
+      console.log('[Sentinel] health check:', _sentinelHealthy ? '✓ OK (real imagery)' : '✗ FALLBACK (' + (sentinelStatus || 'status ' + r.status) + ')');
+      // Reset after 5 minutes so credentials updates are picked up
       setTimeout(function() { _sentinelHealthy = null; _sentinelHealthPromise = null; }, 5 * 60 * 1000);
       return _sentinelHealthy;
     })
@@ -5432,10 +5445,10 @@ function checkSentinelHealth() {
  * Uses Jan-Mar window (harmattan season = lowest cloud cover over Ghana).
  */
 function _gibsDateForYear(year) {
-  var y = Math.min(parseInt(year, 10), new Date().getFullYear());
-  if (y < 2000) y = 2000;
+  var y = parseInt(year, 10);
   var now = new Date();
   var thisYear = now.getFullYear();
+  if (isNaN(y) || y < 2000) y = 2000;
   if (y >= thisYear) {
     // GIBS has ~5-7 day latency — use 30 days ago to guarantee tile exists
     var safe = new Date(now.getTime() - 30 * 86400000);
@@ -5461,6 +5474,13 @@ function _buildGIBSStyle(year) {
     version: 8,
     glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
     sources: {
+      esri_base: {
+        type: 'raster',
+        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+        tileSize: 256,
+        attribution: '© Esri World Imagery',
+        maxzoom: 19
+      },
       gibs: {
         type: 'raster',
         tiles: [
@@ -5476,8 +5496,11 @@ function _buildGIBSStyle(year) {
       }
     },
     layers: [
+      { id: 'esri-base-lyr', type: 'raster', source: 'esri_base',
+        paint: { 'raster-opacity': 1.0 } },
       { id: 'gibs-raw', type: 'raster', source: 'gibs',
-        paint: { 'raster-opacity': 1.0 } }
+        paint: { 'raster-opacity': 1.0 },
+        maxzoom: 10 }
     ]
   };
 }
@@ -5508,6 +5531,7 @@ function _buildEsriStyle(year) {
       }
     },
     layers: [
+      { id: 'bg', type: 'background', paint: { 'background-color': '#0a0a0a' } },
       { id: 'esri-fallback-layer', type: 'raster', source: 'esri_fallback',
         paint: { 'raster-opacity': 1.0 } }
     ]
@@ -5611,6 +5635,7 @@ function getWaybackTileStyle(year, label) {
       }
     },
     layers: [
+      { id: 'bg', type: 'background', paint: { 'background-color': '#0a0a0a' } },
       { id: 'wayback-raw', type: 'raster', source: 'wayback',
         paint: { 'raster-opacity': 1.0 } }
     ]
@@ -5913,7 +5938,7 @@ function uwOpenSplitView() {
       function _onTileError(e) {
         if (_tileErrorSwapped) return;
         _tileErrors++;
-        if (_tileErrors >= 3) {
+        if (_tileErrors >= 8) {
           // Multiple tile failures — switch to GIBS
           _tileErrorSwapped = true;
           _sentinelHealthy = false;

@@ -1,17 +1,17 @@
 /**
- * api/sentinel-tile-proxy.js  — v7 PRODUCTION
+ * api/sentinel-tile-proxy.js  — v8 PRODUCTION
  * ════════════════════════════════════════════════════════════════════════════
  * Sentinel Hub Process API tile proxy for MapLibre GL.
  *
- * KEY FIXES in v7 vs v6:
- *   1. Multi-window date search: tries dry-season windows first (Jan–Mar for
- *      Accra/Ghana), then falls back to full-year. This dramatically reduces
- *      cloud cover in returned imagery.
- *   2. Better 500 error diagnosis — returns clear JSON explaining which env
- *      vars are missing instead of a generic 500.
- *   3. Token cache is module-level so it survives across warm Vercel invocations.
- *   4. Transparent PNG fallback for ALL non-image responses (400, 422, 5xx from
- *      CDSE) so MapLibre never shows a broken tile.
+ * KEY FIXES in v8 vs v7:
+ *   1. Adds X-Sentinel-Status header to ALL responses ('ok' | 'no-credentials' |
+ *      'auth-failed' | 'no-data') so the frontend health check works correctly.
+ *   2. On success, also sets X-Tile-Source for debugging.
+ *   3. Multi-window date search: tries dry-season windows first (Jan–Mar for
+ *      Accra/Ghana), then falls back to full-year.
+ *   4. Token cache is module-level so it survives across warm Vercel invocations.
+ *   5. Transparent PNG fallback for ALL non-image responses so MapLibre never
+ *      shows a broken tile.
  *
  * URL (query-params only — Vercel rewrites drop path params):
  *   /api/sentinel-tile-proxy?z={z}&x={x}&y={y}&year=2022&width=512&height=512
@@ -37,10 +37,15 @@ function tile2bbox(z, x, y) {
 async function getCDSEToken(clientId, clientSecret) {
   const now = Date.now();
   if (_cachedToken && _tokenExpiry > now + 30_000) return _cachedToken;
-  const body = new URLSearchParams({ grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret });
-  const res = await fetch('https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token', {
-    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString(),
+  const body = new URLSearchParams({
+    grant_type:    'client_credentials',
+    client_id:     clientId,
+    client_secret: clientSecret,
   });
+  const res = await fetch(
+    'https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token',
+    { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() }
+  );
   if (!res.ok) throw new Error(`CDSE token ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const data = await res.json();
   _cachedToken = data.access_token;
@@ -85,24 +90,29 @@ function getDateWindows(yrN) {
   const now      = new Date();
   const thisYear = now.getFullYear();
   if (yrN >= thisYear) {
-    const safe = new Date(now.getTime() - 30 * 86400000);
+    const safe = new Date(now.getTime() - 30 * 86_400_000);
     return [{ from: `${yrN}-01-01T00:00:00Z`, to: safe.toISOString().split('T')[0] + 'T23:59:59Z' }];
   }
   return [
-    { from: `${yrN}-12-01T00:00:00Z`, to: `${yrN}-12-31T23:59:59Z` },
-    { from: `${yrN}-01-01T00:00:00Z`, to: `${yrN}-02-28T23:59:59Z` },
-    { from: `${yrN}-11-01T00:00:00Z`, to: `${yrN}-11-30T23:59:59Z` },
-    { from: `${yrN}-03-01T00:00:00Z`, to: `${yrN}-03-31T23:59:59Z` },
-    { from: `${yrN}-01-01T00:00:00Z`, to: `${yrN}-12-31T23:59:59Z` },
+    { from: `${yrN}-01-01T00:00:00Z`, to: `${yrN}-02-28T23:59:59Z` },   // Jan–Feb (peak harmattan)
+    { from: `${yrN}-12-01T00:00:00Z`, to: `${yrN}-12-31T23:59:59Z` },   // December
+    { from: `${yrN}-11-01T00:00:00Z`, to: `${yrN}-11-30T23:59:59Z` },   // November
+    { from: `${yrN}-03-01T00:00:00Z`, to: `${yrN}-03-31T23:59:59Z` },   // March
+    { from: `${yrN}-01-01T00:00:00Z`, to: `${yrN}-12-31T23:59:59Z` },   // Full year fallback
   ];
 }
 
-const TRANSPARENT_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
-function sendTransparent(res, label, yr, z, x, y) {
-  console.log(`[tile-proxy] transparent: ${label} ${yr} ${z}/${x}/${y}`);
+const TRANSPARENT_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+  'base64'
+);
+
+function sendTransparent(res, label, yr, z, x, y, status = 'no-data') {
+  console.log(`[tile-proxy] transparent: ${label} ${yr} ${z}/${x}/${y} status=${status}`);
   res.setHeader('Content-Type', 'image/png');
   res.setHeader('Cache-Control', 'public, max-age=3600');
   res.setHeader('X-No-Data', 'true');
+  res.setHeader('X-Sentinel-Status', status);
   return res.status(200).send(TRANSPARENT_PNG);
 }
 
@@ -115,13 +125,16 @@ export default async function handler(req, res) {
 
   const clientId     = process.env.SENTINEL_CLIENT_ID;
   const clientSecret = process.env.SENTINEL_CLIENT_SECRET;
+
   if (!clientId || !clientSecret) {
     const missing = [!clientId ? 'SENTINEL_CLIENT_ID' : null, !clientSecret ? 'SENTINEL_CLIENT_SECRET' : null].filter(Boolean).join(', ');
-    return res.status(500).json({
-      error:  `Missing env vars: ${missing}`,
-      hint:   'Set in Vercel → Project → Settings → Environment Variables, then redeploy.',
-      how_to: 'Generate at dataspace.copernicus.eu → Sign In → User Settings → OAuth Clients',
-    });
+    // Return transparent PNG (not JSON) so MapLibre doesn't break — also set status header
+    res.setHeader('X-Sentinel-Status', 'no-credentials');
+    res.setHeader('X-Missing-Env', missing);
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'public, max-age=60');
+    console.warn(`[tile-proxy] Missing env vars: ${missing}`);
+    return res.status(200).send(TRANSPARENT_PNG);
   }
 
   let z = parseInt(req.query.z, 10);
@@ -153,11 +166,8 @@ export default async function handler(req, res) {
   } catch (authErr) {
     _cachedToken = null; _tokenExpiry = 0;
     console.error('[tile-proxy] Auth error:', authErr.message);
-    return res.status(401).json({
-      error:  'CDSE authentication failed',
-      detail: authErr.message.slice(0, 300),
-      hint:   'Regenerate credentials at dataspace.copernicus.eu → User Settings → OAuth Clients',
-    });
+    // Return transparent tile (not JSON 401) so MapLibre doesn't show broken tiles
+    return sendTransparent(res, ds.label, yrN, z, x, y, 'auth-failed');
   }
 
   for (const win of getDateWindows(yrN)) {
@@ -165,26 +175,43 @@ export default async function handler(req, res) {
     try {
       r = await fetch('https://sh.dataspace.copernicus.eu/api/v1/process', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'Accept': 'image/png,image/*,*/*' },
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${token}`,
+          'Accept':        'image/png,image/*,*/*'
+        },
         body: JSON.stringify({
           input: {
-            bounds: { bbox: [bbox.minLon, bbox.minLat, bbox.maxLon, bbox.maxLat], properties: { crs: 'http://www.opengis.net/def/crs/EPSG/0/4326' } },
-            data: [{ type: ds.type, dataFilter: { timeRange: { from: win.from, to: win.to }, maxCloudCoverage: ds.maxCC, mosaickingOrder: 'leastCC' } }],
+            bounds: {
+              bbox:       [bbox.minLon, bbox.minLat, bbox.maxLon, bbox.maxLat],
+              properties: { crs: 'http://www.opengis.net/def/crs/EPSG/0/4326' }
+            },
+            data: [{
+              type:       ds.type,
+              dataFilter: {
+                timeRange:        { from: win.from, to: win.to },
+                maxCloudCoverage: ds.maxCC,
+                mosaickingOrder:  'leastCC'
+              }
+            }],
           },
-          output: { width: w, height: h, responses: [{ identifier: 'default', format: { type: 'image/png' } }] },
+          output: {
+            width:     w,
+            height:    h,
+            responses: [{ identifier: 'default', format: { type: 'image/png' } }]
+          },
           evalscript: ds.evalscript,
         }),
       });
     } catch (fetchErr) {
       console.error(`[tile-proxy] fetch error:`, fetchErr.message);
-      return sendTransparent(res, ds.label, yrN, z, x, y);
+      return sendTransparent(res, ds.label, yrN, z, x, y, 'no-data');
     }
 
     if (r.status === 401 || r.status === 403) {
       _cachedToken = null; _tokenExpiry = 0;
-      const txt = await r.text().catch(() => '');
-      console.error(`[tile-proxy] Auth ${r.status}:`, txt.slice(0, 200));
-      return res.status(r.status).json({ error: 'Sentinel auth failed — credentials expired', hint: 'Regenerate at dataspace.copernicus.eu → User Settings → OAuth Clients' });
+      console.error(`[tile-proxy] Auth ${r.status}`);
+      return sendTransparent(res, ds.label, yrN, z, x, y, 'auth-failed');
     }
 
     if (r.status === 400 || r.status === 422) {
@@ -205,18 +232,26 @@ export default async function handler(req, res) {
     }
 
     const buf = await r.arrayBuffer();
-    const pu  = r.headers.get('x-processingunits-spent') || '?';
+    if (buf.byteLength < 200) {
+      // Suspiciously small — likely empty/no-data tile, try next window
+      console.log(`[tile-proxy] Tiny tile (${buf.byteLength}B) — trying next window`);
+      continue;
+    }
+
+    const pu = r.headers.get('x-processingunits-spent') || '?';
     console.log(`[tile-proxy] ✓ ${ds.label} yr=${yrN} z=${z}/${x}/${y} win=${win.from.slice(0,10)} PU:${pu} bytes:${buf.byteLength}`);
 
-    res.setHeader('Content-Type',  'image/png');
-    res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
-    res.setHeader('X-Dataset',     ds.label);
-    res.setHeader('X-Year',        String(yrN));
-    res.setHeader('X-PU-Spent',    pu);
+    res.setHeader('Content-Type',        'image/png');
+    res.setHeader('Cache-Control',       'public, max-age=86400, stale-while-revalidate=604800');
+    res.setHeader('X-Dataset',           ds.label);
+    res.setHeader('X-Year',              String(yrN));
+    res.setHeader('X-PU-Spent',          pu);
+    res.setHeader('X-Sentinel-Status',   'ok');       // ← CRITICAL for health check
+    res.setHeader('X-Tile-Source',       'cdse-sentinel');
     return res.status(200).send(Buffer.from(buf));
   }
 
   // All windows exhausted
   console.log(`[tile-proxy] All windows exhausted: ${ds.label} yr=${yrN} ${z}/${x}/${y}`);
-  return sendTransparent(res, ds.label, yrN, z, x, y);
+  return sendTransparent(res, ds.label, yrN, z, x, y, 'no-data');
 }

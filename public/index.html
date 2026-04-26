@@ -2711,7 +2711,7 @@ function initLayers(){
     tiles:['https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/'
       + 'MODIS_Terra_NDVI_8Day/default/'
       + _initNDVIDate
-      + '/GoogleMapsCompatible_Level9/{z}/{y}/{x}.png'],
+      + '/GoogleMapsCompatible_Level7/{z}/{y}/{x}.png'],
     tileSize:256, attribution:'NASA GIBS · MODIS Terra NDVI 8-Day · ' + _initNDVIDate,
     maxzoom:7, minzoom:1
   });
@@ -2905,7 +2905,7 @@ function syncYear(y,skipTiles=false){
       tiles:['https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/'
         + 'MODIS_Terra_NDVI_8Day/default/'
         + ndviDate
-        + '/GoogleMapsCompatible_Level9/{z}/{y}/{x}.png'],
+        + '/GoogleMapsCompatible_Level7/{z}/{y}/{x}.png'],
       tileSize:256, attribution:'NASA GIBS · MODIS NDVI · ' + ndviDate,
       maxzoom:7, minzoom:1
     });
@@ -5355,8 +5355,7 @@ function uwBuildSentinelStyle(token, year) {
   var lyr     = _sentinelLayerForYear(year);
   var tileUrl = _sentinelProxyTileUrl(year);
   var y       = parseInt(year, 10) || new Date().getFullYear();
-  // CRITICAL: Unique source and layer IDs per year — prevents MapLibre from
-  // sharing tile cache between the FROM and TO split-view panes.
+  // Unique IDs per year — prevents MapLibre tile cache cross-contamination
   var srcId   = 'sentinel_' + y;
   var lyrId   = 'sentinel-layer-' + y;
 
@@ -5376,12 +5375,7 @@ function uwBuildSentinelStyle(token, year) {
     },
     layers: [
       { id: 'bg', type: 'background', paint: { 'background-color': '#0a0a0a' } },
-      {
-        id:     lyrId,
-        type:   'raster',
-        source: srcId,
-        paint:  { 'raster-opacity': 1.0 }
-      }
+      { id: lyrId, type: 'raster', source: srcId, paint: { 'raster-opacity': 1.0 } }
     ]
   };
 }
@@ -5462,15 +5456,13 @@ function _gibsDateForYear(year) {
   // GIBS TrueColor starts 2000-02-24 — year 2000 needs March or later
   if (y === 2000) return '2000-03-15';
   // Jan 15 = peak harmattan dry season over Ghana — minimal cloud cover
-  // Using mid-January (not Feb) to maximise dry-season clear sky probability
   return y + '-01-15';
 }
 
 /**
  * Builds a raw MapLibre style using NASA GIBS MODIS Terra CorrectedReflectance TrueColor.
  * The acquisition DATE is baked into the tile URL — each year fetches that year's
- * actual satellite imagery. No CSS filters, no blending, no overlays.
- * Free, no auth, CORS-open directly from browsers.
+ * actual satellite imagery. No CSS filters, no blending.
  *
  * Coverage: 2000-02-24 to present · Resolution: 250m · Max zoom: Level 9
  * NOTE: sourceId is unique per year to prevent MapLibre tile cache sharing
@@ -5478,24 +5470,23 @@ function _gibsDateForYear(year) {
  */
 function _buildGIBSStyle(year) {
   var date   = _gibsDateForYear(year);
-  var srcId  = 'gibs_' + year; // unique per year — prevents cache cross-contamination
-  var layers = [];
-  var sources = {};
+  var y      = parseInt(year, 10) || 2000;
+  var sources = {}, layers = [];
 
-  // Esri base — full resolution, every zoom level
-  sources['esri_base_' + year] = {
+  // Esri base — full resolution, every zoom level (always shows real satellite detail)
+  sources['esri_base_' + y] = {
     type: 'raster',
     tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
     tileSize: 256,
     attribution: '© Esri World Imagery',
     maxzoom: 19
   };
-  layers.push({ id: 'esri-base-lyr-' + year, type: 'raster', source: 'esri_base_' + year,
+  layers.push({ id: 'esri-base-lyr-' + y, type: 'raster', source: 'esri_base_' + y,
     paint: { 'raster-opacity': 1.0 } });
 
   // GIBS MODIS TrueColor overlay — real dated imagery at zoom ≤9
-  // Layer: MODIS_Terra_CorrectedReflectance_TrueColor (NOT NDVI which has 404s)
-  sources[srcId] = {
+  // Layer: MODIS_Terra_CorrectedReflectance_TrueColor · TileMatrix: GoogleMapsCompatible_Level9
+  sources['gibs_tc_' + y] = {
     type: 'raster',
     tiles: [
       'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/' +
@@ -5508,9 +5499,8 @@ function _buildGIBSStyle(year) {
     minzoom: 1,
     maxzoom: 9
   };
-  layers.push({ id: 'gibs-raw-' + year, type: 'raster', source: srcId,
-    paint: { 'raster-opacity': 1.0 },
-    maxzoom: 10 });
+  layers.push({ id: 'gibs-tc-' + y, type: 'raster', source: 'gibs_tc_' + y,
+    paint: { 'raster-opacity': 1.0 }, maxzoom: 10 });
 
   return {
     version: 8,
@@ -5581,14 +5571,10 @@ var _waybackLoadPromise = null;
 
 // Hardcoded Esri Wayback item IDs by year — these are the best available
 // annual composites for the West Africa / Accra region.
-// Item IDs sourced from: https://www.arcgis.com/apps/wayback/
-// Each itemId maps to a distinct Esri World Imagery vintage — the only way
-// to get genuinely different tiles from the Wayback service.
 // Last verified April 2026. Extend as new vintages are published.
 var _ESRI_WAYBACK_HARDCODED = [
   { id: 10,  year: 2014 },
-  { id: 14,  year: 2015 },  // early 2015 capture
-  { id: 26,  year: 2015 },  // mid-2015 capture (better Ghana coverage)
+  { id: 26,  year: 2015 },
   { id: 30,  year: 2016 },
   { id: 46,  year: 2017 },
   { id: 58,  year: 2018 },
@@ -5629,35 +5615,34 @@ function getWaybackTileStyle(year, label) {
   var y = parseInt(year, 10);
 
   if (!itemId) {
-    // No Wayback itemId for this year — fall back to NASA GIBS dated tiles
+    // No Wayback itemId for this year — fall back to NASA GIBS TrueColor dated tiles
     return _buildGIBSStyle(y);
   }
 
-  // CRITICAL: Use unique source IDs per year to prevent MapLibre tile cache
+  // CRITICAL: Unique source IDs per year — prevents MapLibre tile cache
   // cross-contamination between the FROM and TO split-view panes.
   var wbSrcId   = 'wayback_' + itemId + '_' + y;
   var gibsSrcId = 'gibs_wb_' + y;
   var gibsDate  = _gibsDateForYear(y);
+  var sources   = {}, layers = [];
 
-  var sources = {};
-  var layers  = [];
+  layers.push({ id: 'bg_' + y, type: 'background', paint: { 'background-color': '#0a0a0a' } });
 
-  // Primary: Esri Wayback — year-specific archive imagery at all zoom levels
-  // CORS FIX: route through /api/wayback-proxy (Esri Wayback has no CORS headers)
+  // Primary: Esri Wayback year-specific archive at all zoom levels
+  // CORS FIX: routed through /api/wayback-proxy (Esri Wayback has no CORS headers)
   sources[wbSrcId] = {
     type:        'raster',
-    tiles:       ['/api/wayback-proxy?itemId=' + itemId + '&z={z}&y={y}&x={x}'],
+    tiles:       ['/api/wayback-proxy?itemId=' + itemId + '&year=' + y + '&z={z}&y={y}&x={x}'],
     tileSize:    256,
     attribution: 'Esri Wayback · ' + y + ' (item ' + itemId + ') via proxy',
     maxzoom:     19,
     minzoom:     1
   };
-  layers.push({ id: 'bg', type: 'background', paint: { 'background-color': '#0a0a0a' } });
   layers.push({ id: 'wayback-raw-' + y, type: 'raster', source: wbSrcId,
     paint: { 'raster-opacity': 1.0 } });
 
-  // Secondary overlay: NASA GIBS MODIS TrueColor at low zoom (≤9) for context
-  // Baked date ensures this is genuinely that year's imagery
+  // Secondary: NASA GIBS MODIS TrueColor at low zoom (≤9) blended lightly for
+  // extra year-differentiation — baked date is genuinely that year's imagery
   if (y >= 2000) {
     sources[gibsSrcId] = {
       type:        'raster',
@@ -5672,7 +5657,6 @@ function getWaybackTileStyle(year, label) {
       minzoom:     1,
       maxzoom:     9
     };
-    // Blend GIBS lightly over Wayback at low zoom for extra year-differentiation
     layers.push({ id: 'gibs-blend-' + y, type: 'raster', source: gibsSrcId,
       paint: { 'raster-opacity': 0.35 }, maxzoom: 9 });
   }

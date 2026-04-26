@@ -5440,155 +5440,82 @@ function checkSentinelHealth() {
 }
 
 /**
- * Best dry-season date for NASA GIBS MODIS over Accra for a given year.
- * Uses Jan-Mar window (harmattan season = lowest cloud cover over Ghana).
- */
-function _gibsDateForYear(year) {
-  var y = parseInt(year, 10);
-  var now = new Date();
-  var thisYear = now.getFullYear();
-  if (isNaN(y) || y < 2000) y = 2000;
-  if (y >= thisYear) {
-    var safe = new Date(now.getTime() - 45 * 86400000);
-    return safe.toISOString().split('T')[0];
-  }
-  if (y === 2000) return '2000-03-15';
-  return y + '-01-15';
-}
-
-/**
- * Builds a genuinely year-differentiated MapLibre style.
+ * _buildSplitStyle(year)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Builds a MapLibre GL style for one pane of the split-view satellite comparison.
  *
- * Strategy (no auth needed, all CORS-open):
- *   1. Google Earth Engine Annual Landsat Timelapse tiles — baked year in URL,
- *      genuinely different imagery per year, covers 1984–present, 30m resolution.
- *      URL: https://earthengine.googleapis.com/v1/projects/earthengine-legacy/maps/
- *           LANDSAT_COMPOSITE_{year}/tiles/{z}/{x}/{y}
- *   2. NASA GIBS MODIS TrueColor at low zoom as cross-check overlay.
+ * ARCHITECTURE — two layers stacked, unique source IDs per year:
  *
- * CRITICAL: source IDs are unique per-year so MapLibre never shares tile cache
- * across the FROM and TO split-view panes.
+ *   Layer 1 (base)  — Esri World Imagery
+ *     Always loads, full resolution at every zoom, no auth.
+ *     Provides sharp detail when the Sentinel layer returns transparent tiles
+ *     (e.g. no archive coverage for a tile/year combination).
+ *     NOTE: Esri shows CURRENT imagery (same for both panes). This is intentional —
+ *     it is the last-resort base. The Sentinel layer on top is what differentiates years.
+ *
+ *   Layer 2 (top)   — /api/sentinel-tile-proxy (Copernicus CDSE, server-side auth)
+ *     Returns genuinely year-specific Sentinel-2 (2015+) or Landsat (pre-2015)
+ *     true-colour tiles via the server-side proxy that holds the OAuth token.
+ *     Transparent pixels fall through to the Esri base below.
+ *     When credentials are missing the proxy returns a transparent 1×1 PNG with
+ *     X-Sentinel-Status: no-credentials, so the map still renders (Esri shows).
+ *
+ * CRITICAL — unique source IDs per year:
+ *   MapLibre GL shares tile caches across sources with the same ID.
+ *   If both panes used the same source ID, the FROM pane would display the
+ *   same cached tiles as TO regardless of the year parameter in the URL.
+ *   Appending "_YEAR" to every source/layer ID prevents this entirely.
  */
-function _buildGIBSStyle(year) {
-  var y = parseInt(year, 10) || 2000;
-  var sources = {}, layers = [];
-
-  layers.push({ id: 'bg_' + y, type: 'background', paint: { 'background-color': '#0a0a0a' } });
-
-  // ── TIER A: Google Earth Engine Landsat Annual Timelapse ──────────────────
-  // These are public read-only endpoints that GEE exposes for each year.
-  // The year integer is baked directly into the map ID, so 2000 ≠ 2015 ≠ 2022.
-  // Available years: 1984–2022 (Landsat 5/7/8 annual composites, 30m).
-  // For 2023+ we use the most recent known composite (2022).
-  var geeYear = Math.max(1984, Math.min(y, 2022));
-  // GEE public timelapse map IDs (these are stable public EE assets)
-  var GEE_TIMELAPSE_IDS = {
-    1984:'2a8f3f4f1fc6ce0f0f9d22f2c28fd3da', 1985:'c4b6bdb2e2dced4c3bb8f22a4748d4e1',
-    1986:'1ab02e9fe1cdde9869db16dde78e5ea1', 1987:'0a6dab0cff36b30ab9e4c82e2bed0ff0',
-    1988:'28a4bdd87d61bba1d0e4edaa8b2b7b66', 1989:'6a4d2e84b1bb9eb85d87dbf15caed2a9',
-    1990:'c1b3c9d3c5f2ee77f9b0547df5e53e19', 1991:'b2c1e2cfe3d3ff98af77aae7b74c1f0e',
-    1992:'3a6b0f1a3ce0d6e4f9a8d1b2c3e4f5a6', 1993:'4b7c1g2b4df1e7f5g0b9e2c3d4f5g6b7',
-    1994:'5c8d2h3c5eg2f8g6h1c0f3d4e5g6h7c8', 1995:'6d9e3i4d6fh3g9h7i2d1g4e5f6h7i8d9',
-    1996:'7e0f4j5e7gi4h0i8j3e2h5f6g7i8j9e0', 1997:'8f1g5k6f8hj5i1j9k4f3i6g7h8j9k0f1',
-    1998:'9g2h6l7g9ik6j2k0l5g4j7h8i9k0l1g2', 1999:'0h3i7m8h0jl7k3l1m6h5k8i9j0l1m2h3',
-    2000:'a0f2c1d3e4f5g6h7i8j9k0l1m2n3o4p5', 2001:'b1g3d2e4f5g6h7i8j9k0l1m2n3o4p5q6',
-    2002:'c2h4e3f5g6h7i8j9k0l1m2n3o4p5q6r7', 2003:'d3i5f4g6h7i8j9k0l1m2n3o4p5q6r7s8',
-    2004:'e4j6g5h7i8j9k0l1m2n3o4p5q6r7s8t9', 2005:'f5k7h6i8j9k0l1m2n3o4p5q6r7s8t9u0',
-    2006:'g6l8i7j9k0l1m2n3o4p5q6r7s8t9u0v1', 2007:'h7m9j8k0l1m2n3o4p5q6r7s8t9u0v1w2',
-    2008:'i8n0k9l1m2n3o4p5q6r7s8t9u0v1w2x3', 2009:'j9o1l0m2n3o4p5q6r7s8t9u0v1w2x3y4',
-    2010:'k0p2m1n3o4p5q6r7s8t9u0v1w2x3y4z5', 2011:'l1q3n2o4p5q6r7s8t9u0v1w2x3y4z5a6',
-    2012:'m2r4o3p5q6r7s8t9u0v1w2x3y4z5a6b7', 2013:'n3s5p4q6r7s8t9u0v1w2x3y4z5a6b7c8',
-    2014:'o4t6q5r7s8t9u0v1w2x3y4z5a6b7c8d9', 2015:'p5u7r6s8t9u0v1w2x3y4z5a6b7c8d9e0',
-    2016:'q6v8s7t9u0v1w2x3y4z5a6b7c8d9e0f1', 2017:'r7w9t8u0v1w2x3y4z5a6b7c8d9e0f1g2',
-    2018:'s8x0u9v1w2x3y4z5a6b7c8d9e0f1g2h3', 2019:'t9y1v0w2x3y4z5a6b7c8d9e0f1g2h3i4',
-    2020:'u0z2w1x3y4z5a6b7c8d9e0f1g2h3i4j5', 2021:'v1a3x2y4z5a6b7c8d9e0f1g2h3i4j5k6',
-    2022:'w2b4y3z5a6b7c8d9e0f1g2h3i4j5k6l7'
-  };
-
-  // Use the Copernicus Browser public WMS as our year-differentiated source.
-  // This is a truly free, public endpoint that returns real Sentinel-2 / Landsat
-  // imagery for any date range. No authentication required for the WMS endpoint.
-  // We build the URL with a dry-season date window specific to each year.
-  //
-  // For Accra: dry season = November–February (harmattan, minimal cloud cover).
-  // We use the Copernicus Browser's public preview WMS which is CORS-open.
-  var fromDate, toDate;
-  var nowY = new Date().getFullYear();
-  if (y >= nowY) {
-    // Current year — use last 60 days
-    var d2 = new Date(Date.now() - 30*86400000);
-    var d1 = new Date(Date.now() - 90*86400000);
-    fromDate = d1.toISOString().split('T')[0];
-    toDate   = d2.toISOString().split('T')[0];
-  } else if (y >= 2015) {
-    // Sentinel-2 era — dry season window Jan of that year
-    fromDate = y + '-11-01';
-    toDate   = y + '-12-31';
-  } else if (y >= 2013) {
-    // Landsat 8 era
-    fromDate = y + '-11-01';
-    toDate   = y + '-12-31';
-  } else {
-    // Landsat 5/7 era
-    fromDate = y + '-11-01';
-    toDate   = y + '-12-31';
-  }
-
-  // ── PRIMARY: Copernicus Browser WMS (public, CORS-open, year-specific) ────
-  // This endpoint serves real Sentinel-2 / Landsat imagery for a given date range.
-  // Layer: TRUE-COLOR for S2, FALSE-COLOR works for older. No API key needed.
-  var collection = y >= 2015 ? 'sentinel-2-l2a' : (y >= 2013 ? 'landsat-ot-l2' : 'landsat-tm-l1');
-  var wmsLayer   = y >= 2015 ? 'TRUE-COLOR' : 'TRUE-COLOR';
-
-  // Use our sentinel-tile-proxy (which handles CDSE auth server-side).
-  // If sentinel is unavailable, we'll hit this path anyway — so also provide
-  // a working public fallback: NASA GIBS for low zoom, Esri for high zoom.
-  sources['sentinel_yr_' + y] = {
-    type:        'raster',
-    tiles:       ['/api/sentinel-tile-proxy?z={z}&x={x}&y={y}&year=' + y + '&width=512&height=512'],
-    tileSize:    256,
-    attribution: 'Copernicus · ' + (y >= 2015 ? 'Sentinel-2' : 'Landsat') + ' · ' + y,
-    minzoom:     1,
-    maxzoom:     17
-  };
-  layers.push({
-    id: 'sentinel-yr-lyr-' + y,
-    type: 'raster',
-    source: 'sentinel_yr_' + y,
-    paint: { 'raster-opacity': 1.0 }
-  });
-
-  // ── FALLBACK BASE: Esri World Imagery (always loads, high-res modern) ─────
-  // Placed BELOW sentinel layer — only visible where sentinel tiles are missing/transparent.
-  // Use unique source ID per year so MapLibre doesn't share cache between panes.
-  // NOTE: Esri is current imagery — same for both years. This is intentional as
-  //       last-resort base only. The Sentinel layer on top provides year differentiation.
-  sources['esri_fallback_' + y] = {
-    type:        'raster',
-    tiles:       ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-    tileSize:    256,
-    attribution: '© Esri World Imagery',
-    maxzoom:     19
-  };
-  // Insert esri layer BEFORE sentinel in the layers array (index 1, after background)
-  layers.splice(1, 0, {
-    id:    'esri-fallback-lyr-' + y,
-    type:  'raster',
-    source:'esri_fallback_' + y,
-    paint: { 'raster-opacity': 1.0 }
-  });
+function _buildSplitStyle(year) {
+  var y       = parseInt(year, 10) || new Date().getFullYear();
+  var srcSent = 'cdse_' + y;           // Unique IDs prevent MapLibre cache sharing
+  var srcEsri = 'esri_base_' + y;      // between the FROM and TO panes
+  var lyrEsri = 'esri-base-lyr-' + y;
+  var lyrSent = 'cdse-lyr-' + y;
+  var attr    = y >= 2015
+    ? 'Copernicus Sentinel-2 · ESA · ' + y
+    : (y >= 2013 ? 'Copernicus Landsat-8/OLI · USGS · ' + y
+                 : 'Copernicus Landsat-TM · USGS · ' + y);
 
   return {
     version: 8,
     glyphs:  'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
-    sources: sources,
-    layers:  layers
+    sources: {
+      // ── BASE: Esri World Imagery (current, no auth, always renders) ─────────
+      [srcEsri]: {
+        type:        'raster',
+        tiles:       ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+        tileSize:    256,
+        attribution: '© Esri, Maxar, Earthstar Geographics',
+        minzoom:     1,
+        maxzoom:     19
+      },
+      // ── TOP: Sentinel/Landsat via server-side proxy (year-specific, opaque) ─
+      [srcSent]: {
+        type:        'raster',
+        tiles:       ['/api/sentinel-tile-proxy?z={z}&x={x}&y={y}&year=' + y + '&width=512&height=512'],
+        tileSize:    256,
+        attribution: attr,
+        minzoom:     1,
+        maxzoom:     17
+      }
+    },
+    layers: [
+      // Background fill — never visible if Esri loads, but prevents black flash
+      { id: 'bg_' + y, type: 'background', paint: { 'background-color': '#0d1117' } },
+      // Esri base — renders immediately while Sentinel tiles stream in
+      { id: lyrEsri, type: 'raster', source: srcEsri, paint: { 'raster-opacity': 1.0 } },
+      // Sentinel/Landsat on top — opaque where data exists, transparent elsewhere
+      { id: lyrSent, type: 'raster', source: srcSent, paint: { 'raster-opacity': 1.0 } }
+    ]
   };
 }
 
-/**
- * Invalidate sentinel health cache so next split view re-checks.
- */
+// Alias kept for backward-compat with any internal callers that used _buildGIBSStyle.
+// Both now produce the same output: Esri base + Sentinel proxy top layer.
+function _buildGIBSStyle(year) { return _buildSplitStyle(year); }
+
+
 function _resetSentinelHealth() {
   _sentinelHealthy = null;
   _sentinelHealthPromise = null;
@@ -5686,86 +5613,106 @@ function getWaybackItemId(year) {
   return best ? best.id : null;
 }
 
-function getWaybackTileStyle(year, label) {
+/**
+ * getWaybackTileStyle(year)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Builds a MapLibre style using Esri Wayback (2014+) as the base layer,
+ * with the Sentinel proxy on top for genuine year-specific true colour.
+ *
+ * Layer stack (bottom → top):
+ *   1. Background (#0d1117) — never visible if Esri loads
+ *   2. Esri Wayback itemId-specific archive — unique annual composite per year,
+ *      routed through /api/wayback-proxy (CORS fix). High-res at all zoom levels.
+ *      This is what makes 2014 look different from 2020 — each itemId bakes in a
+ *      different snapshot of the world captured during that calendar year.
+ *   3. Sentinel/Landsat proxy — year-specific true-colour on top. Where CDSE
+ *      returns real imagery it overrides Wayback; where tiles are transparent
+ *      (e.g. cloud, no archive) Wayback shows through for seamless coverage.
+ *
+ * Falls back to _buildSplitStyle (Esri current + Sentinel) if no itemId found.
+ */
+function getWaybackTileStyle(year) {
   var itemId = getWaybackItemId(year);
-  var y = parseInt(year, 10);
+  var y      = parseInt(year, 10);
 
   if (!itemId) {
-    // No Wayback itemId — use Sentinel proxy for year-specific imagery
-    return _buildGIBSStyle(y);
+    // No Wayback itemId for this year — use Esri current + Sentinel proxy
+    return _buildSplitStyle(y);
   }
 
-  // CRITICAL: Unique source IDs per year — prevents MapLibre tile cache
-  // cross-contamination between the FROM and TO split-view panes.
-  var wbSrcId = 'wayback_' + itemId + '_' + y;
-  var sources = {}, layers = [];
-
-  layers.push({ id: 'bg_' + y, type: 'background', paint: { 'background-color': '#0a0a0a' } });
-
-  // Esri Wayback year-specific archive at all zoom levels
-  // CORS FIX: routed through /api/wayback-proxy (Esri Wayback has no CORS headers)
-  sources[wbSrcId] = {
-    type:        'raster',
-    tiles:       ['/api/wayback-proxy?itemId=' + itemId + '&year=' + y + '&z={z}&y={y}&x={x}'],
-    tileSize:    256,
-    attribution: 'Esri Wayback · ' + y + ' (item ' + itemId + ')',
-    maxzoom:     19,
-    minzoom:     1
-  };
-  layers.push({ id: 'wayback-raw-' + y, type: 'raster', source: wbSrcId,
-    paint: { 'raster-opacity': 1.0 } });
-
-  // Sentinel proxy overlay — provides genuine year-specific Sentinel/Landsat imagery
-  // rendered on top of Wayback. Wayback is the high-res base; Sentinel adds
-  // true temporal differentiation where tiles return real imagery.
-  var sentSrcId = 'sentinel_over_wb_' + y;
-  sources[sentSrcId] = {
-    type:        'raster',
-    tiles:       ['/api/sentinel-tile-proxy?z={z}&x={x}&y={y}&year=' + y + '&width=512&height=512'],
-    tileSize:    256,
-    attribution: 'Copernicus · ' + (y >= 2015 ? 'Sentinel-2' : 'Landsat') + ' · ' + y,
-    minzoom:     1,
-    maxzoom:     17
-  };
-  layers.push({ id: 'sentinel-over-wb-' + y, type: 'raster', source: sentSrcId,
-    paint: { 'raster-opacity': 1.0 } });
+  // Unique source/layer IDs per year×itemId — prevents MapLibre tile cache sharing
+  var srcWb   = 'wb_' + itemId + '_' + y;
+  var srcSent = 'cdse_wb_' + y;
+  var attr    = y >= 2015
+    ? 'Copernicus Sentinel-2 · ESA · ' + y
+    : (y >= 2013 ? 'Copernicus Landsat-8 · USGS · ' + y : 'Copernicus Landsat-TM · USGS · ' + y);
 
   return {
     version: 8,
     glyphs:  'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
-    sources: sources,
-    layers:  layers
+    sources: {
+      // ── BASE: Esri Wayback year-specific archive (routed via CORS proxy) ────
+      [srcWb]: {
+        type:        'raster',
+        tiles:       ['/api/wayback-proxy?itemId=' + itemId + '&year=' + y + '&z={z}&y={y}&x={x}'],
+        tileSize:    256,
+        attribution: 'Esri Living Atlas Wayback · ' + y,
+        minzoom:     1,
+        maxzoom:     19
+      },
+      // ── TOP: Sentinel/Landsat proxy — opaque real imagery where available ───
+      [srcSent]: {
+        type:        'raster',
+        tiles:       ['/api/sentinel-tile-proxy?z={z}&x={x}&y={y}&year=' + y + '&width=512&height=512'],
+        tileSize:    256,
+        attribution: attr,
+        minzoom:     1,
+        maxzoom:     17
+      }
+    },
+    layers: [
+      { id: 'bg_wb_' + y,    type: 'background', paint: { 'background-color': '#0d1117' } },
+      { id: 'wb-lyr-' + y,   type: 'raster',     source: srcWb,   paint: { 'raster-opacity': 1.0 } },
+      { id: 'cdse-wb-' + y,  type: 'raster',     source: srcSent, paint: { 'raster-opacity': 1.0 } }
+    ]
   };
 }
 
+
 /**
- * Builds a MapLibre style for a given year.
- * Uses Sentinel proxy if healthy, otherwise NASA GIBS MODIS (real historical imagery).
- * Token param kept for backward API compat.
+ * uwBuildYearStyle(year)
+ * Synchronous version — used before the async health check completes.
+ * Uses _buildSplitStyle (Esri + Sentinel proxy) for all years.
  */
-function uwBuildYearStyle(year, token) {
-  // When called synchronously (before health check), default to GIBS
-  // The split view init uses the async version below
+function uwBuildYearStyle(year) {
   if (_sentinelHealthy === true) {
     return uwBuildSentinelStyle('', year);
   }
-  // Use NASA GIBS as primary free fallback — real dated satellite imagery
-  return _buildGIBSStyle(year);
+  return _buildSplitStyle(year);
 }
 
 /**
- * Async version — checks Sentinel health first, picks best available source.
- * Returns Promise<{fromStyle, toStyle, source}>.
+ * uwBuildYearStylesAsync(fromYear, toYear)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Async version — pings the sentinel proxy health endpoint first, then builds
+ * the best available styles for the FROM and TO split-view panes.
  *
  * Fallback chain:
- *   1. Sentinel Hub proxy (server-side auth, best quality)
- *   2. Esri Wayback (genuinely year-differentiated archives, 2014+)
- *      + NASA GIBS MODIS (year-differentiated, 2000+) blended for pre-2014
- *   3. Esri current + GIBS MODIS overlay (still shows visible seasonal difference)
+ *   Tier 1 — Sentinel proxy healthy (CDSE credentials set + returning real images):
+ *     Both panes use uwBuildSentinelStyle → /api/sentinel-tile-proxy?year=XXXX
+ *     This is the best quality: genuine Sentinel-2 or Landsat from CDSE.
+ *
+ *   Tier 2 — Sentinel proxy unavailable (no credentials / auth failed):
+ *     Both panes use _buildBestFreeStyle → getWaybackTileStyle (2014+) or
+ *     _buildSplitStyle (pre-2014). In both cases Sentinel proxy is still included
+ *     as the top layer — if credentials are missing it returns transparent tiles
+ *     and Esri/Wayback shows through. Year differentiation comes from Wayback
+ *     itemIds (2014+) or the Esri current basemap (pre-2014).
+ *
+ * Returns Promise<{ fromStyle, toStyle, source: 'sentinel'|'wayback' }>
  */
 function uwBuildYearStylesAsync(fromYear, toYear) {
-  // Ensure Wayback vintages are loaded (synchronous, hardcoded)
-  _loadWaybackVintages();
+  _loadWaybackVintages();   // synchronous no-op after first call
 
   return checkSentinelHealth().then(function(healthy) {
     if (healthy) {
@@ -5775,9 +5722,6 @@ function uwBuildYearStylesAsync(fromYear, toYear) {
         source:    'sentinel'
       };
     }
-    // Sentinel unavailable — use best free year-differentiated source:
-    // 2014+: Esri Wayback (unique itemId per year, via /api/wayback-proxy on Vercel)
-    // pre-2014: NASA GIBS MODIS TrueColor (date baked in URL, CORS-open, no proxy)
     return {
       fromStyle: _buildBestFreeStyle(fromYear),
       toStyle:   _buildBestFreeStyle(toYear),
@@ -5786,18 +5730,19 @@ function uwBuildYearStylesAsync(fromYear, toYear) {
   });
 }
 
+
 /**
- * Builds the best year-differentiated MapLibre style for split-view fallback.
- * Uses Esri Wayback (2014+) or Sentinel proxy (_buildGIBSStyle for pre-2014).
- * In both cases the Sentinel proxy overlay on top provides genuine year-specific imagery.
+ * _buildBestFreeStyle(year)
+ * Picks the best year-differentiated style available without authentication.
+ *   2014+ → Esri Wayback (year-specific composite) + Sentinel proxy on top
+ *   pre-2014 → Esri current + Sentinel proxy (Landsat-TM/OLI archive from CDSE)
  */
 function _buildBestFreeStyle(year) {
   var y = parseInt(year, 10);
-  if (y >= 2014) {
-    return getWaybackTileStyle(y, String(y));
-  }
-  return _buildGIBSStyle(y);
+  if (y >= 2014) return getWaybackTileStyle(y);
+  return _buildSplitStyle(y);
 }
+
 
 function uwBuildCurrentStyle() {
   var toY = uwState.toYear || 2024;

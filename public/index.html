@@ -1381,6 +1381,16 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
   overflow:visible;
   background:#000;
 }
+/* FROM map: always full pointer events (it's the bottom layer, always full-width) */
+#split-slider-from-map {
+  pointer-events:auto;
+  z-index:1;
+}
+/* TO map: sits on top — JS manages pointer-events dynamically based on slider pos */
+#split-slider-to-map {
+  pointer-events:none; /* default: pass through; JS sets to 'auto' on right half hover */
+  z-index:2;
+}
 #split-slider-to-map canvas {
   /* JS will set clip-path here directly */
 }
@@ -2708,12 +2718,14 @@ function initLayers(){
   // index as a colour-mapped overlay. Only shown when user toggles NDVI layer ON.
   var _initNDVIDate = getNASATileDate(curYear,'ndvi');
   map.addSource('nasa-ndvi',{type:'raster',
+    // GIBS NDVI 8-day: TileMatrixSet=250m, maxzoom=6 only.
+    // Correct URL uses no level suffix — just {z}/{y}/{x}.png
     tiles:['https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/'
       + 'MODIS_Terra_NDVI_8Day/default/'
       + _initNDVIDate
-      + '/GoogleMapsCompatible_Level7/{z}/{y}/{x}.png'],
+      + '/250m/{z}/{y}/{x}.png'],
     tileSize:256, attribution:'NASA GIBS · MODIS Terra NDVI 8-Day · ' + _initNDVIDate,
-    maxzoom:7, minzoom:1
+    maxzoom:6, minzoom:1
   });
   map.addLayer({id:'ndvi-lyr',type:'raster',source:'nasa-ndvi',paint:{'raster-opacity':LS.ndvi?0.75:0}});
 
@@ -2905,9 +2917,9 @@ function syncYear(y,skipTiles=false){
       tiles:['https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/'
         + 'MODIS_Terra_NDVI_8Day/default/'
         + ndviDate
-        + '/GoogleMapsCompatible_Level7/{z}/{y}/{x}.png'],
+        + '/250m/{z}/{y}/{x}.png'],
       tileSize:256, attribution:'NASA GIBS · MODIS NDVI · ' + ndviDate,
-      maxzoom:7, minzoom:1
+      maxzoom:6, minzoom:1
     });
     map.addLayer({id:'ndvi-lyr',type:'raster',source:'nasa-ndvi',paint:{'raster-opacity':LS.ndvi?0.75:0}});
   }
@@ -5622,42 +5634,11 @@ var _waybackReleasesFetching = false;
  * Falls back silently to _WAYBACK_RELEASES if the fetch fails.
  */
 function _fetchWaybackReleases() {
-  if (_waybackReleasesLive || _waybackReleasesFetching) return;
-  _waybackReleasesFetching = true;
-  // The WMTSCapabilities.xml lists all releases with their dates
-  fetch('https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS/1.0.0/default/WMTSCapabilities.xml', {
-    mode: 'cors', cache: 'force-cache'
-  }).then(function(r) {
-    if (!r.ok) throw new Error('Wayback capabilities ' + r.status);
-    return r.text();
-  }).then(function(xml) {
-    // Parse TileMatrixSet Identifier elements alongside Layer ResourceURL templates
-    // Each release appears as <ows:Identifier>N</ows:Identifier> under a TileMatrixSet
-    var releases = {};
-    var matches = xml.match(/\/(\d+)\/GoogleMapsCompatible/g) || [];
-    // Also try parsing ResourceURL template=".../{Style}/{TileMatrixSet}/..."
-    var urlMatches = xml.match(/template="[^"]*\/(\d{1,3})\/GoogleMapsCompatible[^"]*"/g) || [];
-    // Extract release numbers and try to map to years via date elements nearby
-    // Simple heuristic: find <ows:Identifier>YYYY-MM-DD</ows:Identifier> blocks
-    var dateReleaseRe = /<ows:Identifier>(\d{4}-\d{2}-\d{2})<\/ows:Identifier>[\s\S]*?<ows:Identifier>(\d{1,3})<\/ows:Identifier>/g;
-    var match;
-    while ((match = dateReleaseRe.exec(xml)) !== null) {
-      var year = parseInt(match[1].slice(0, 4), 10);
-      var releaseNum = parseInt(match[2], 10);
-      if (year >= 2014 && year <= 2030 && releaseNum > 0) {
-        // Keep the highest release number per year (most recent annual composite)
-        if (!releases[year] || releaseNum > releases[year]) {
-          releases[year] = releaseNum;
-        }
-      }
-    }
-    if (Object.keys(releases).length >= 4) {
-      _waybackReleasesLive = releases;
-      console.log('[Wayback] Live releases fetched:', releases);
-    }
-  }).catch(function(e) {
-    console.warn('[Wayback] Could not fetch live releases, using hardcoded:', e.message);
-  });
+  // Esri Wayback capabilities XML is also CORS-blocked from browsers.
+  // We use the hardcoded _WAYBACK_RELEASES table exclusively.
+  // Table was verified against https://www.arcgis.com/apps/wayback/ in April 2026.
+  // To update: check the Wayback Explorer app and update _WAYBACK_RELEASES above.
+  console.log('[Wayback] Using hardcoded release table (capabilities fetch skipped — CORS)');
 }
 
 /**
@@ -5747,14 +5728,12 @@ function _buildWaybackStyle(year) {
         minzoom:     0,
         maxzoom:     9   // CRITICAL: MODIS TrueColor only exists at zoom 0-9
       },
-      // ── TOP: Esri Wayback — year-specific composite ───────────────────────
-      // Primary: direct CORS-open URL. Fallback: server-side proxy.
+      // ── TOP: Esri Wayback — year-specific composite via CORS proxy ──────────
+      // wayback.maptiles.arcgis.com does NOT send CORS headers — direct browser
+      // requests are blocked. ALL tiles must go through /api/wayback-proxy.
       [srcWb]: {
         type:        'raster',
-        tiles:       [
-          'https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS/1.0.0/default/' + releaseNum + '/GoogleMapsCompatible/{z}/{y}/{x}',
-          '/api/wayback-proxy?itemId=' + releaseNum + '&z={z}&y={y}&x={x}'
-        ],
+        tiles:       ['/api/wayback-proxy?itemId=' + releaseNum + '&z={z}&y={y}&x={x}'],
         tileSize:    256,
         attribution: 'Esri Living Atlas Wayback \u00b7 ' + y,
         minzoom:     0,
@@ -6220,21 +6199,41 @@ function _initSplitSlider() {
   if(_splitSlider._touchend)   { document.removeEventListener('touchend',  _splitSlider._touchend);  _splitSlider._touchend  = null; }
 
   var pct = _splitSlider.pct || 50;
+  var toMapEl   = document.getElementById('split-slider-to-map');
+  var fromMapEl = document.getElementById('split-slider-from-map');
 
+  // Clip TO map visually and route pointer events to the correct map
   function applyPct(p) {
     pct = Math.max(2, Math.min(98, p));
     _splitSlider.pct = pct;
-    // KEY FIX: clip the WebGL canvas directly — CSS clip on the container div
-    // does NOT propagate to its WebGL canvas child in all browsers.
-    var toMapEl = document.getElementById('split-slider-to-map');
+    var clipVal = 'inset(0 0 0 ' + pct + '%)';
     if(toMapEl) {
-      toMapEl.style.clipPath = 'inset(0 0 0 ' + pct + '%)';
+      toMapEl.style.clipPath = clipVal;
       var canvas = toMapEl.querySelector('canvas');
-      if(canvas) canvas.style.clipPath = 'inset(0 0 0 ' + pct + '%)';
+      if(canvas) canvas.style.clipPath = clipVal;
     }
     handle.style.left = pct + '%';
     handle.style.transform = 'translateX(-50%)';
   }
+
+  // Route pointer events: cursor left of slider → FROM map; right → TO map
+  function updatePointerEvents(clientX) {
+    if(_splitSlider.dragging) return;
+    var rect = wrap.getBoundingClientRect();
+    if(!rect.width || !toMapEl || !fromMapEl) return;
+    var relX = (clientX - rect.left) / rect.width * 100;
+    if(relX <= pct) {
+      toMapEl.style.pointerEvents   = 'none';
+      fromMapEl.style.pointerEvents = 'auto';
+    } else {
+      toMapEl.style.pointerEvents   = 'auto';
+      fromMapEl.style.pointerEvents = 'none';
+    }
+  }
+
+  // Init: FROM map gets events by default
+  if(toMapEl)   toMapEl.style.pointerEvents   = 'none';
+  if(fromMapEl) fromMapEl.style.pointerEvents = 'auto';
   applyPct(pct);
 
   function onMove(clientX) {
@@ -6245,8 +6244,19 @@ function _initSplitSlider() {
 
   _splitSlider.dragging = false;
 
+  // Track pointer over wrap to route events dynamically
+  wrap.addEventListener('pointermove', function(e) {
+    if(!_splitSlider.dragging) updatePointerEvents(e.clientX);
+  });
+  wrap.addEventListener('pointerleave', function() {
+    if(toMapEl)   toMapEl.style.pointerEvents   = 'none';
+    if(fromMapEl) fromMapEl.style.pointerEvents = 'auto';
+  });
+
   handle.addEventListener('mousedown', function(e) {
     _splitSlider.dragging = true;
+    if(toMapEl)   toMapEl.style.pointerEvents   = 'none';
+    if(fromMapEl) fromMapEl.style.pointerEvents = 'none';
     e.preventDefault();
     e.stopPropagation();
   });
@@ -6254,12 +6264,19 @@ function _initSplitSlider() {
   _splitSlider._mousemove = function(e) {
     if(_splitSlider.dragging) onMove(e.clientX);
   };
-  _splitSlider._mouseup = function() { _splitSlider.dragging = false; };
+  _splitSlider._mouseup = function(e) {
+    if(_splitSlider.dragging) {
+      _splitSlider.dragging = false;
+      updatePointerEvents(e.clientX);
+    }
+  };
   document.addEventListener('mousemove', _splitSlider._mousemove);
   document.addEventListener('mouseup',   _splitSlider._mouseup);
 
   handle.addEventListener('touchstart', function(e) {
     _splitSlider.dragging = true;
+    if(toMapEl)   toMapEl.style.pointerEvents   = 'none';
+    if(fromMapEl) fromMapEl.style.pointerEvents = 'none';
     e.preventDefault();
     e.stopPropagation();
   }, {passive: false});
@@ -6270,23 +6287,24 @@ function _initSplitSlider() {
       onMove(e.touches[0].clientX);
     }
   };
-  _splitSlider._touchend = function() { _splitSlider.dragging = false; };
+  _splitSlider._touchend = function(e) {
+    _splitSlider.dragging = false;
+    if(e.changedTouches && e.changedTouches[0]) updatePointerEvents(e.changedTouches[0].clientX);
+  };
   document.addEventListener('touchmove', _splitSlider._touchmove, {passive: false});
   document.addEventListener('touchend',  _splitSlider._touchend);
 
-  // Click anywhere on wrap to jump slider
+  // Click on wrap to jump slider
   wrap.addEventListener('click', function(e) {
     if(e.target === handle || handle.contains(e.target)) return;
     if(e.target.closest && (e.target.closest('#split-click-popup') || e.target.closest('#split-key-card'))) return;
     onMove(e.clientX);
   });
 
-  // Re-apply clip whenever MapLibre redraws or resizes (canvas can be recreated)
-  function _reapply() { applyPct(_splitSlider.pct); }
-  if(splitState.mapTo) {
-    splitState.mapTo.on('render', _reapply);
-    splitState.mapTo.on('resize', function(){ setTimeout(_reapply, 50); });
-  }
+  // Re-apply clip whenever MapLibre redraws or resizes
+  function _reapply() { if(!_splitSlider.dragging) applyPct(_splitSlider.pct); }
+  if(splitState.mapTo)   { splitState.mapTo.on('render', _reapply);   splitState.mapTo.on('resize',   function(){ setTimeout(_reapply,50); }); }
+  if(splitState.mapFrom) { splitState.mapFrom.on('render', _reapply); splitState.mapFrom.on('resize', function(){ setTimeout(_reapply,50); }); }
 
   _splitSlider.initialized = true;
 }

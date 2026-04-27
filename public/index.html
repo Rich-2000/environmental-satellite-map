@@ -2651,31 +2651,31 @@ window.addEventListener('resize',()=>{
  * @param {'tc'|'ndvi'}  - tile product
  */
 function getNASATileDate(year, product){
+  // Clamp future/current years — GIBS has 5-14 day latency; NDVI composites lag further.
   const clampedYear = Math.min(year, 2024);
   const now = new Date();
-  const isCurrentYear = clampedYear >= now.getFullYear();
+  const isCurrentYear = (clampedYear >= now.getFullYear());
 
   if(isCurrentYear){
-    // Use a date ~8 days ago to stay within confirmed tile availability
-    const safe = new Date(now.getTime() - 8 * 86400000);
+    // Use 14-days-ago buffer so tiles are definitely published on GIBS
+    const safe = new Date(now.getTime() - 14 * 86400000);
     if(product === 'ndvi'){
-      // NDVI_8Day composites start on Jan 1 and step every 8 days (DOY groups)
-      // Snap to the nearest 8-day boundary
-      const doy = Math.floor((safe - new Date(safe.getFullYear(),0,0)) / 86400000);
-      const snapDOY = Math.max(1, Math.floor(doy/8)*8 + 1);
+      // NDVI_8Day composites snap to DOY 1,9,17,25,...,361 boundaries.
+      const startOfYear = new Date(safe.getFullYear(), 0, 1);
+      const doy = Math.floor((safe - startOfYear) / 86400000) + 1;
+      const snapDOY = Math.max(1, Math.floor((doy - 1) / 8) * 8 + 1);
       const snap = new Date(safe.getFullYear(), 0, snapDOY);
       return snap.toISOString().split('T')[0];
     } else {
-      // True-color: daily availability — use 8-days-ago date directly
       return safe.toISOString().split('T')[0];
     }
   } else {
-    // Historical: April anchor (dry season, minimal cloud cover for Accra)
+    // Historical: April 7 = DOY 97 (confirmed 8-day NDVI boundary, Ghana dry season).
+    // April 1 for true-color (daily, always available).
     if(product === 'ndvi'){
-      // Closest 8-day DOY to April 6 (DOY 97 = April 7 approx, confirmed tile)
-      return `${clampedYear}-04-06`;
+      return clampedYear + '-04-07';  // DOY 97 — confirmed NDVI_8Day tile
     } else {
-      return `${clampedYear}-04-01`;
+      return clampedYear + '-04-01';  // Dry-season peak, low cloud over Accra
     }
   }
 }
@@ -5454,7 +5454,7 @@ function _buildSentinelProxyStyle(year) {
         tileSize: 512,
         attribution: attribution,
         maxzoom: 18,
-        minzoom: 1
+        minzoom: 4  // Sentinel not needed at world-level zooms; saves PU quota
       }
     },
     layers: [
@@ -5469,27 +5469,46 @@ function _buildSentinelProxyStyle(year) {
  * Real dated high-res composites for 2014–present.
  */
 function _buildWaybackProxyStyle(year) {
+  // Layered style: Esri base (always visible) + Wayback on top (dated archive imagery).
+  // If Wayback tiles are missing for a region, the Esri base prevents deep blue ocean.
   var itemId = getWaybackItemId(parseInt(year, 10));
-  var tileUrl = itemId
+  var waybackUrl = itemId
     ? '/api/wayback-proxy?itemId=' + itemId + '&z={z}&y={y}&x={x}'
-    : 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+    : null;
+
+  var sources = {
+    esri_wb_base: {
+      type: 'raster',
+      tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+      tileSize: 256,
+      attribution: 'Esri World Imagery',
+      maxzoom: 19
+    }
+  };
+  var layers = [
+    { id: 'esri-wb-base-layer', type: 'raster', source: 'esri_wb_base',
+      paint: { 'raster-opacity': 1.0 } }
+  ];
+
+  // Only add Wayback layer if we have a valid itemId
+  if (waybackUrl) {
+    sources['wayback'] = {
+      type: 'raster',
+      tiles: [waybackUrl],
+      tileSize: 256,
+      attribution: 'Esri Living Atlas Wayback · ' + year,
+      maxzoom: 19,
+      minzoom: 1
+    };
+    layers.push({ id: 'wayback-layer', type: 'raster', source: 'wayback',
+      paint: { 'raster-opacity': 1.0 } });
+  }
+
   return {
     version: 8,
     glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
-    sources: {
-      wayback: {
-        type: 'raster',
-        tiles: [tileUrl],
-        tileSize: 256,
-        attribution: 'Esri Living Atlas Wayback · ' + year,
-        maxzoom: 19,
-        minzoom: 1
-      }
-    },
-    layers: [
-      { id: 'wayback-layer', type: 'raster', source: 'wayback',
-        paint: { 'raster-opacity': 1.0 } }
-    ]
+    sources: sources,
+    layers: layers
   };
 }
 
@@ -5591,10 +5610,64 @@ function _applyYearFilter(mapEl, year) {
 function uwBuildYearStyle(year) {
   var y = parseInt(year, 10) || new Date().getFullYear();
 
-  // Always use the sentinel-tile-proxy — it handles S2, L8, L4/5 per year
-  // and returns transparent tiles (not errors) when no data exists.
-  // This ensures FROM year and TO year always fetch DIFFERENT tile URLs.
-  return _buildSentinelProxyStyle(y);
+  // ── LAYERED STYLE: Esri basemap (bottom) + optional GIBS WELD + Sentinel proxy (top) ──
+  // This guarantees users always see clear satellite imagery even when:
+  //   • Sentinel credentials are missing / token fails → proxy returns transparent PNGs
+  //   • PU quota exhausted → proxy returns transparent PNGs
+  //   • A year/window has no Sentinel coverage
+  // The Esri World Imagery base is always present, so the map never shows deep blue ocean.
+
+  var sources = {};
+  var layers  = [];
+
+  // ── BASE: Esri World Imagery (current, always works, no auth, high-res) ──
+  sources['esri_base'] = {
+    type: 'raster',
+    tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+    tileSize: 256,
+    attribution: 'Esri World Imagery',
+    maxzoom: 19
+  };
+  layers.push({ id: 'esri-base-layer', type: 'raster', source: 'esri_base',
+    paint: { 'raster-opacity': 1.0 } });
+
+  // ── MIDDLE: NASA GIBS Landsat WELD (2000-2019, 30m, annually dated) ──
+  // Shows at zoom ≤ 12 and gives real historical land-cover context.
+  if (y >= 2000 && y <= 2019) {
+    var weldDate = y + '-01-01';
+    sources['gibs_weld_base'] = {
+      type: 'raster',
+      tiles: ['https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/Landsat_WELD_CorrectedReflectance_TrueColor_Global_Annual/default/' + weldDate + '/GoogleMapsCompatible_Level12/{z}/{y}/{x}.jpg'],
+      tileSize: 256,
+      attribution: 'NASA GIBS · Landsat WELD · ' + y,
+      maxzoom: 12,
+      minzoom: 1
+    };
+    layers.push({ id: 'gibs-weld-base-layer', type: 'raster', source: 'gibs_weld_base',
+      paint: { 'raster-opacity': 0.95 } });
+  }
+
+  // ── TOP: Sentinel tile proxy (real per-year imagery, returns transparent PNG on failure) ──
+  // Handles: Sentinel-2 L2A (2015+), Landsat-8 OLI (2013-2015), Landsat-4/5 TM (pre-2013).
+  // Dry-season windows (Nov–Mar harmattan) + leastCC mosaicking = minimal cloud cover.
+  var sentinelTileUrl = '/api/sentinel-tile-proxy?z={z}&x={x}&y={y}&year=' + y + '&width=512&height=512';
+  sources['sentinel_proxy'] = {
+    type: 'raster',
+    tiles: [sentinelTileUrl],
+    tileSize: 512,
+    attribution: _getSatSourceLabel(y),
+    maxzoom: 18,
+    minzoom: 4  // Don't request Sentinel at very low zooms — WELD/Esri handle those
+  };
+  layers.push({ id: 'sentinel-proxy-layer', type: 'raster', source: 'sentinel_proxy',
+    paint: { 'raster-opacity': 1.0 } });
+
+  return {
+    version: 8,
+    glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
+    sources: sources,
+    layers: layers
+  };
 }
 
 /**
@@ -6103,7 +6176,7 @@ function splitToggleRivers() {
 }
 
 // ── Wayback imagery toggle — swap between Esri Wayback archive and Sentinel ──
-var _splitUseWayback = true; // default ON for years >= 2014
+var _splitUseWayback = false; // default OFF — uwBuildYearStyle has layered Esri+GIBS+Sentinel fallback
 function splitToggleWayback() {
   _splitUseWayback = !_splitUseWayback;
   var btn = document.getElementById('sbtn-wayback');

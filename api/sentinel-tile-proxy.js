@@ -1,17 +1,20 @@
 /**
- * api/sentinel-tile-proxy.js — v7 PRODUCTION
+ * api/sentinel-tile-proxy.js — v8 PRODUCTION (patched)
  * ════════════════════════════════════════════════════════════════════════════
  * Sentinel Hub Process API tile proxy for MapLibre GL.
+ *
+ * KEY FIXES in v8:
+ *   • On missing credentials → returns transparent PNG (not 500 JSON).
+ *     This prevents MapLibre's evented.ts tile-load errors.
+ *   • On auth failure → returns transparent PNG (not 401 JSON).
+ *   • evalscripts use DN units + gain for correct true-colour rendering.
+ *   • Dry-season windows: Dec→Jan-Feb→Nov→Mar→full-year (harmattan = clear sky).
+ *   • maxCloudCoverage and leastCC mosaicking to minimise cloud cover in output.
  *
  * Supports three Copernicus datasets, auto-selected by year:
  *   • sentinel-2-l2a   : 2015 → present   (10 m, true colour)
  *   • landsat-ot-l2    : 2013 → 2015      (30 m, Landsat-8 OLI)
  *   • landsat-tm-l1    : pre-2013          (30 m, Landsat-4/5 TM)
- *
- * Dry-season windows (harmattan = Nov–Mar, minimal cloud over Ghana) are
- * tried in order — first window with imagery wins.
- * Falls back to a transparent 1×1 PNG (never a 4xx/5xx) so MapLibre
- * never renders a broken tile.
  *
  * URL: /api/sentinel-tile-proxy?z={z}&x={x}&y={y}&year=2022&width=512&height=512
  *
@@ -20,6 +23,21 @@
  *   SENTINEL_CLIENT_SECRET  — your CDSE OAuth client secret
  *   Regenerate at: dataspace.copernicus.eu → Sign In → User Settings → OAuth Clients
  */
+
+// 1×1 transparent PNG — returned instead of error responses so MapLibre never
+// receives a non-image tile (which causes evented.ts Error cascades in the console).
+const TRANSPARENT_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+  'base64'
+);
+
+function sendTransparent(res, reason, yr, z, x, y) {
+  console.log(`[tile-proxy] transparent (${reason}): yr=${yr} ${z}/${x}/${y}`);
+  res.setHeader('Content-Type', 'image/png');
+  res.setHeader('Cache-Control', 'public, max-age=300');  // short cache for auth failures
+  res.setHeader('X-No-Data', reason);
+  return res.status(200).send(TRANSPARENT_PNG);
+}
 
 let _cachedToken = null;
 let _tokenExpiry = 0;
@@ -52,7 +70,7 @@ async function getCDSEToken(clientId, clientSecret) {
   return _cachedToken;
 }
 
-// ── Evalscripts ─────────────────────────────────────────────────────────────
+// ── Evalscripts (VERSION=3, DN units, brightness-scaled true colour) ─────────
 const EVAL_S2 = `//VERSION=3
 function setup(){return{input:[{bands:["B02","B03","B04","dataMask"],units:"DN"}],output:{bands:4,sampleType:"UINT8"}};}
 function evaluatePixel(s){
@@ -79,41 +97,37 @@ function evaluatePixel(s){
 
 function getDataset(year) {
   const y = parseInt(year, 10);
-  if (isNaN(y) || y >= 2015) return { type: 'sentinel-2-l2a',  evalscript: EVAL_S2,  label: 'S2-L2A',    maxCC: 30 };
-  if (y >= 2013)             return { type: 'landsat-ot-l2',   evalscript: EVAL_OLI, label: 'L8-OLI-L2', maxCC: 40 };
+  if (isNaN(y) || y >= 2015) return { type: 'sentinel-2-l2a',  evalscript: EVAL_S2,  label: 'S2-L2A',    maxCC: 25 };
+  if (y >= 2013)             return { type: 'landsat-ot-l2',   evalscript: EVAL_OLI, label: 'L8-OLI-L2', maxCC: 35 };
                              return { type: 'landsat-tm-l1',   evalscript: EVAL_TM,  label: 'L45-TM-L1', maxCC: 50 };
 }
 
-// Dry-season windows for Accra/Ghana (harmattan = Nov–Mar, minimal cloud).
-// Tried in order — first window with imagery wins.
+/**
+ * Dry-season windows for Ghana/Accra (harmattan = Nov–Mar, minimal cloud).
+ * Tried in order — first window that returns imagery wins.
+ * Using maxCloudCoverage + leastCC mosaicking gives cloud-free composites.
+ */
 function getDateWindows(yrN) {
   const now      = new Date();
   const thisYear = now.getFullYear();
   if (yrN >= thisYear) {
-    // Current year — use safe window ending 30 days ago
+    // Current year — use safe window ending 30 days ago to avoid missing tiles
     const safe = new Date(now.getTime() - 30 * 86400000);
-    return [{ from: `${yrN}-01-01T00:00:00Z`, to: safe.toISOString().split('T')[0] + 'T23:59:59Z' }];
+    const safeStr = safe.toISOString().split('T')[0] + 'T23:59:59Z';
+    return [{ from: `${yrN}-01-01T00:00:00Z`, to: safeStr }];
   }
   return [
-    { from: `${yrN}-12-01T00:00:00Z`, to: `${yrN}-12-31T23:59:59Z` },  // Peak dry season Dec
-    { from: `${yrN}-01-01T00:00:00Z`, to: `${yrN}-02-28T23:59:59Z` },  // Jan-Feb (after harmattan)
-    { from: `${yrN}-11-01T00:00:00Z`, to: `${yrN}-11-30T23:59:59Z` },  // Nov onset
-    { from: `${yrN}-03-01T00:00:00Z`, to: `${yrN}-03-31T23:59:59Z` },  // Early Mar
-    { from: `${yrN}-01-01T00:00:00Z`, to: `${yrN}-12-31T23:59:59Z` },  // Full year fallback
+    // Peak dry season: December (lowest cloud over Ghana)
+    { from: `${yrN}-12-01T00:00:00Z`, to: `${yrN}-12-31T23:59:59Z` },
+    // Jan-Feb (post-harmattan, still dry)
+    { from: `${yrN}-01-01T00:00:00Z`, to: `${yrN}-02-28T23:59:59Z` },
+    // November onset of dry season
+    { from: `${yrN}-11-01T00:00:00Z`, to: `${yrN}-11-30T23:59:59Z` },
+    // Early March (tail of dry season)
+    { from: `${yrN}-03-01T00:00:00Z`, to: `${yrN}-03-31T23:59:59Z` },
+    // Full year fallback — leastCC will still pick the clearest scene
+    { from: `${yrN}-01-01T00:00:00Z`, to: `${yrN}-12-31T23:59:59Z` },
   ];
-}
-
-const TRANSPARENT_PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
-  'base64'
-);
-
-function sendTransparent(res, label, yr, z, x, y) {
-  console.log(`[tile-proxy] transparent: ${label} ${yr} ${z}/${x}/${y}`);
-  res.setHeader('Content-Type', 'image/png');
-  res.setHeader('Cache-Control', 'public, max-age=3600');
-  res.setHeader('X-No-Data', 'true');
-  return res.status(200).send(TRANSPARENT_PNG);
 }
 
 export default async function handler(req, res) {
@@ -125,14 +139,16 @@ export default async function handler(req, res) {
 
   const clientId     = process.env.SENTINEL_CLIENT_ID;
   const clientSecret = process.env.SENTINEL_CLIENT_SECRET;
+
+  // ── CRITICAL FIX: Return transparent PNG instead of 500 JSON when credentials missing.
+  // Previously this returned a JSON 500 response, which MapLibre cannot parse as an image
+  // tile → fires evented.ts:149 Error cascade in the browser console.
+  // Now it returns a transparent 1×1 PNG so MapLibre silently skips the tile.
   if (!clientId || !clientSecret) {
     const missing = [!clientId ? 'SENTINEL_CLIENT_ID' : null, !clientSecret ? 'SENTINEL_CLIENT_SECRET' : null]
       .filter(Boolean).join(', ');
-    return res.status(500).json({
-      error:  `Missing env vars: ${missing}`,
-      hint:   'Set in Vercel → Project → Settings → Environment Variables, then redeploy.',
-      how_to: 'Generate at dataspace.copernicus.eu → Sign In → User Settings → OAuth Clients',
-    });
+    console.warn(`[tile-proxy] Missing env vars: ${missing} — returning transparent tile`);
+    return sendTransparent(res, 'missing-credentials', 'unknown', 0, 0, 0);
   }
 
   let z = parseInt(req.query.z, 10);
@@ -170,11 +186,8 @@ export default async function handler(req, res) {
   } catch (authErr) {
     _cachedToken = null; _tokenExpiry = 0;
     console.error('[tile-proxy] Auth error:', authErr.message);
-    return res.status(401).json({
-      error:  'CDSE authentication failed',
-      detail: authErr.message.slice(0, 300),
-      hint:   'Regenerate credentials at dataspace.copernicus.eu → User Settings → OAuth Clients',
-    });
+    // ── CRITICAL FIX: Return transparent PNG instead of 401 JSON on auth failure.
+    return sendTransparent(res, 'auth-failed', yrN, z, x, y);
   }
 
   for (const win of getDateWindows(yrN)) {
@@ -198,34 +211,21 @@ export default async function handler(req, res) {
               dataFilter: {
                 timeRange:       { from: win.from, to: win.to },
                 maxCloudCoverage: ds.maxCC,
-                mosaickingOrder: 'leastCC'
+                mosaickingOrder: 'leastCC'  // pick least-cloudy scene in the window
               }
-            }],
+            }]
           },
           output: {
-            width: w, height: h,
+            width:  w,
+            height: h,
             responses: [{ identifier: 'default', format: { type: 'image/png' } }]
           },
-          evalscript: ds.evalscript,
+          evalscript: ds.evalscript
         }),
+        signal: AbortSignal.timeout ? AbortSignal.timeout(25000) : undefined
       });
     } catch (fetchErr) {
-      console.error('[tile-proxy] fetch error:', fetchErr.message);
-      return sendTransparent(res, ds.label, yrN, z, x, y);
-    }
-
-    if (r.status === 401 || r.status === 403) {
-      _cachedToken = null; _tokenExpiry = 0;
-      const txt = await r.text().catch(() => '');
-      console.error(`[tile-proxy] Auth ${r.status}:`, txt.slice(0, 200));
-      return res.status(r.status).json({
-        error: 'Sentinel auth failed — credentials expired',
-        hint:  'Regenerate at dataspace.copernicus.eu → User Settings → OAuth Clients'
-      });
-    }
-
-    if (r.status === 400 || r.status === 422) {
-      console.log(`[tile-proxy] No data (${r.status}): ${ds.label} yr=${yrN} win=${win.from.slice(0,10)}→${win.to.slice(0,10)} tile=${z}/${x}/${y}`);
+      console.warn(`[tile-proxy] fetch error: ${ds.label} yr=${yrN} win=${win.from.slice(0,10)} — ${fetchErr.message}`);
       continue; // try next window
     }
 
@@ -253,7 +253,6 @@ export default async function handler(req, res) {
     return res.status(200).send(Buffer.from(buf));
   }
 
-  // All windows exhausted — return transparent tile
-  console.log(`[tile-proxy] All windows exhausted: ${ds.label} yr=${yrN} ${z}/${x}/${y}`);
-  return sendTransparent(res, ds.label, yrN, z, x, y);
+  // All windows exhausted — return transparent tile (never break MapLibre)
+  return sendTransparent(res, 'no-data-all-windows', yrN, z, x, y);
 }

@@ -1282,17 +1282,9 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
 }
 .split-load-txt{font-size:11px;color:var(--text3);font-family:'JetBrains Mono',monospace;text-align:center;padding:0 10px}
 
-/* Historical overlay tint for FROM pane */
-.split-hist-tint{
-  position:absolute;inset:0;
-  background:rgba(16,185,129,.04);
-  pointer-events:none;z-index:5;
-}
-.split-now-tint{
-  position:absolute;inset:0;
-  background:rgba(244,63,94,.04);
-  pointer-events:none;z-index:5;
-}
+/* Tint overlays REMOVED — raw satellite imagery shown without colour treatment */
+.split-hist-tint{ display:none!important; }
+.split-now-tint{  display:none!important; }
 
 /* Split map canvases — pointer cursor to signal clickability */
 #split-pane-from .split-map-inner canvas,
@@ -1308,10 +1300,17 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
   letter-spacing: .3px;
 }
 
+/* Split map canvases — NO filter, NO colour treatment whatsoever */
 #split-pane-from .split-map-inner canvas,
-#split-pane-to   .split-map-inner canvas {
+#split-pane-to   .split-map-inner canvas,
+#split-slider-from-map canvas,
+#split-slider-to-map   canvas,
+#split-slider-from canvas,
+#split-slider-to canvas {
   filter: none !important;
   -webkit-filter: none !important;
+  mix-blend-mode: normal !important;
+  opacity: 1 !important;
 }
 
 #split-slider-wrap {
@@ -1379,6 +1378,17 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
   width:100%;
   height:100%;
   overflow:visible;
+  background:#ffffff;
+}
+#split-slider-from-map {
+  background:#ffffff;
+}
+/* Force MapLibre container backgrounds to white — prevents dark-ocean bleedthrough */
+#split-slider-from-map .maplibregl-map,
+#split-slider-to-map .maplibregl-map,
+#split-slider-from-map .maplibregl-canvas-container,
+#split-slider-to-map .maplibregl-canvas-container {
+  background:#ffffff !important;
 }
 #split-slider-to-map canvas {
   /* JS will set clip-path here directly */
@@ -1712,13 +1722,8 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
   animation:fadeIn .4s ease;
 }
 .split-hist-filter-badge,.split-curr-visual-tint{
-  position:absolute;top:10px;z-index:20;
-  background:rgba(5,13,18,.82);
-  border-radius:6px;padding:5px 10px;
-  font-family:'JetBrains Mono',monospace;
-  font-size:9px;font-weight:700;letter-spacing:.8px;
-  pointer-events:none;white-space:nowrap;
-  animation:fadeIn .3s ease;
+  /* kept for layout but hidden — no tinting on satellite imagery */
+  display:none!important;
 }
 #split-pane-from,#split-pane-to{position:relative;}
 </style>
@@ -2690,12 +2695,12 @@ function initLayers(){
 
   // True-color: init at current year's April composite (syncYear will update it)
   const _initTCDate=getNASATileDate(curYear,'tc');
-  map.addSource('nasa-tc',{type:'raster',tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${_initTCDate}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`],tileSize:256,attribution:'NASA GIBS',maxzoom:9,minzoom:1});
+  map.addSource('nasa-tc',{type:'raster',tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${_initTCDate}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`],tileSize:256,attribution:'NASA GIBS',maxzoom:9,minzoom:4});
   map.addLayer({id:'nasa-tc-lyr',type:'raster',source:'nasa-tc',paint:{'raster-opacity':LS.satellite?0.55:0}});
 
   // NDVI: compute the latest available 8-day composite date dynamically
   const _initNDVIDate=getNASATileDate(curYear,'ndvi');
-  map.addSource('nasa-ndvi',{type:'raster',tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_NDVI_8Day/default/${_initNDVIDate}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.png`],tileSize:256,attribution:'NASA GIBS NDVI',maxzoom:9,minzoom:1});
+  map.addSource('nasa-ndvi',{type:'raster',tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_NDVI_8Day/default/${_initNDVIDate}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.png`],tileSize:256,attribution:'NASA GIBS NDVI',maxzoom:9,minzoom:4});
   map.addLayer({id:'ndvi-lyr',type:'raster',source:'nasa-ndvi',paint:{'raster-opacity':LS.ndvi?0.8:0}});
 
   addGeojsonLayers('urban',URBAN_ZONES.map(z=>({type:'Feature',properties:{n:z.n,era:z.era,sev:z.sev},geometry:{type:'Polygon',coordinates:[z.c]}})));
@@ -2868,7 +2873,7 @@ function syncYear(y,skipTiles=false){
     if(map.getSource('nasa-tc'))map.removeSource('nasa-tc');
     map.addSource('nasa-tc',{type:'raster',
       tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${tileDate}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`],
-      tileSize:256,attribution:'NASA GIBS',maxzoom:9,minzoom:1
+      tileSize:256,attribution:'NASA GIBS',maxzoom:9,minzoom:4
     });
     map.addLayer({id:'nasa-tc-lyr',type:'raster',source:'nasa-tc',paint:{'raster-opacity':LS.satellite?0.55:0}});
 
@@ -2878,7 +2883,7 @@ function syncYear(y,skipTiles=false){
     if(map.getSource('nasa-ndvi'))map.removeSource('nasa-ndvi');
     map.addSource('nasa-ndvi',{type:'raster',
       tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_NDVI_8Day/default/${ndviDate}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.png`],
-      tileSize:256,attribution:'NASA GIBS NDVI',maxzoom:9,minzoom:1
+      tileSize:256,attribution:'NASA GIBS NDVI',maxzoom:9,minzoom:4
     });
     map.addLayer({id:'ndvi-lyr',type:'raster',source:'nasa-ndvi',paint:{'raster-opacity':LS.ndvi?0.8:0}});
   }
@@ -5469,46 +5474,37 @@ function _buildSentinelProxyStyle(year) {
  * Real dated high-res composites for 2014–present.
  */
 function _buildWaybackProxyStyle(year) {
-  // Layered style: Esri base (always visible) + Wayback on top (dated archive imagery).
-  // If Wayback tiles are missing for a region, the Esri base prevents deep blue ocean.
+  // Wayback-only style — no Esri stacking (which is undated and causes same-image problem).
+  // Wayback tiles DO cover Ghana/West Africa so this works for years 2014+.
+  // If no itemId found, fall back to Sentinel proxy (dated) not Esri (undated).
   var itemId = getWaybackItemId(parseInt(year, 10));
-  var waybackUrl = itemId
-    ? '/api/wayback-proxy?itemId=' + itemId + '&z={z}&y={y}&x={x}'
-    : null;
 
-  var sources = {
-    esri_wb_base: {
-      type: 'raster',
-      tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-      tileSize: 256,
-      attribution: 'Esri World Imagery',
-      maxzoom: 19
-    }
-  };
-  var layers = [
-    { id: 'esri-wb-base-layer', type: 'raster', source: 'esri_wb_base',
-      paint: { 'raster-opacity': 1.0 } }
-  ];
-
-  // Only add Wayback layer if we have a valid itemId
-  if (waybackUrl) {
-    sources['wayback'] = {
-      type: 'raster',
-      tiles: [waybackUrl],
-      tileSize: 256,
-      attribution: 'Esri Living Atlas Wayback · ' + year,
-      maxzoom: 19,
-      minzoom: 1
-    };
-    layers.push({ id: 'wayback-layer', type: 'raster', source: 'wayback',
-      paint: { 'raster-opacity': 1.0 } });
+  if (!itemId) {
+    // No wayback release for this year → use Sentinel proxy instead
+    return uwBuildYearStyle(year);
   }
 
+  var waybackUrl = '/api/wayback-proxy?itemId=' + itemId + '&z={z}&y={y}&x={x}';
   return {
     version: 8,
     glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
-    sources: sources,
-    layers: layers
+    sources: {
+      wayback: {
+        type: 'raster',
+        tiles: [waybackUrl],
+        tileSize: 256,
+        attribution: 'Esri Living Atlas Wayback · ' + year,
+        maxzoom: 19,
+        minzoom: 1
+      }
+    },
+    layers: [
+      // White background so no-data areas are white, not blue
+      { id: 'bg-white-wb', type: 'background', paint: { 'background-color': '#ffffff' } },
+      // Raw Wayback imagery — no opacity, no filter, no colour treatment
+      { id: 'wayback-layer', type: 'raster', source: 'wayback',
+        paint: { 'raster-opacity': 1.0 } }
+    ]
   };
 }
 
@@ -5522,20 +5518,8 @@ function _buildGIBSStyle(year) {
   var layers = [];
   var sources = {};
 
-  // Landsat WELD annual composite (2000-2019, maxzoom 12)
-  if (y >= 2000 && y <= 2019) {
-    var weldDate = y + '-01-01';
-    sources['gibs_weld'] = {
-      type: 'raster',
-      tiles: ['https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/Landsat_WELD_CorrectedReflectance_TrueColor_Global_Annual/default/' + weldDate + '/GoogleMapsCompatible_Level12/{z}/{y}/{x}.jpg'],
-      tileSize: 256,
-      attribution: 'NASA GIBS · Landsat WELD · ' + y,
-      maxzoom: 12,
-      minzoom: 1
-    };
-    layers.push({ id: 'gibs-weld-layer', type: 'raster', source: 'gibs_weld',
-      paint: { 'raster-opacity': 1.0 } });
-  }
+  // NOTE: Landsat WELD removed — it has NO tile coverage for Ghana/West Africa
+  // (tile requests for that region all return 404). Using MODIS only.
 
   // MODIS Terra TrueColor fallback (maxzoom 9) — April 6 = peak dry season Ghana
   var modisClamped = Math.min(Math.max(y, 2000), 2024);
@@ -5585,10 +5569,16 @@ function _buildEsriStyle(year) {
 
 // Kept for legacy call-sites — now a no-op since real tile sources differentiate
 function _applyYearFilter(mapEl, year) {
-  // No-op: with real per-year tile proxies, CSS fake-aging is not needed
+  // No-op — real per-year tile proxies handle year differentiation.
+  // Explicitly clear any residual CSS that might tint the canvas.
   if (!mapEl) return;
-  var canvas = mapEl.querySelector('canvas');
-  if (canvas) canvas.style.filter = ''; // ensure no stale filter
+  var canvases = mapEl.querySelectorAll('canvas');
+  canvases.forEach(function(c) {
+    c.style.filter = '';
+    c.style.webkitFilter = '';
+    c.style.opacity = '';
+    c.style.mixBlendMode = '';
+  });
 }
 
 /**
@@ -5610,63 +5600,42 @@ function _applyYearFilter(mapEl, year) {
 function uwBuildYearStyle(year) {
   var y = parseInt(year, 10) || new Date().getFullYear();
 
-  // ── LAYERED STYLE: Esri basemap (bottom) + optional GIBS WELD + Sentinel proxy (top) ──
-  // This guarantees users always see clear satellite imagery even when:
-  //   • Sentinel credentials are missing / token fails → proxy returns transparent PNGs
-  //   • PU quota exhausted → proxy returns transparent PNGs
-  //   • A year/window has no Sentinel coverage
-  // The Esri World Imagery base is always present, so the map never shows deep blue ocean.
-
-  var sources = {};
-  var layers  = [];
-
-  // ── BASE: Esri World Imagery (current, always works, no auth, high-res) ──
-  sources['esri_base'] = {
-    type: 'raster',
-    tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-    tileSize: 256,
-    attribution: 'Esri World Imagery',
-    maxzoom: 19
-  };
-  layers.push({ id: 'esri-base-layer', type: 'raster', source: 'esri_base',
-    paint: { 'raster-opacity': 1.0 } });
-
-  // ── MIDDLE: NASA GIBS Landsat WELD (2000-2019, 30m, annually dated) ──
-  // Shows at zoom ≤ 12 and gives real historical land-cover context.
-  if (y >= 2000 && y <= 2019) {
-    var weldDate = y + '-01-01';
-    sources['gibs_weld_base'] = {
-      type: 'raster',
-      tiles: ['https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/Landsat_WELD_CorrectedReflectance_TrueColor_Global_Annual/default/' + weldDate + '/GoogleMapsCompatible_Level12/{z}/{y}/{x}.jpg'],
-      tileSize: 256,
-      attribution: 'NASA GIBS · Landsat WELD · ' + y,
-      maxzoom: 12,
-      minzoom: 1
-    };
-    layers.push({ id: 'gibs-weld-base-layer', type: 'raster', source: 'gibs_weld_base',
-      paint: { 'raster-opacity': 0.95 } });
-  }
-
-  // ── TOP: Sentinel tile proxy (real per-year imagery, returns transparent PNG on failure) ──
-  // Handles: Sentinel-2 L2A (2015+), Landsat-8 OLI (2013-2015), Landsat-4/5 TM (pre-2013).
-  // Dry-season windows (Nov–Mar harmattan) + leastCC mosaicking = minimal cloud cover.
+  // ── SENTINEL-ONLY STYLE (no basemap stacking, no colour mixing) ──────────────
+  // The split-view panes must show REAL, RAW satellite imagery for each year.
+  // Stacking Esri (non-dated) underneath caused:
+  //   • Both FROM and TO panes looking identical (Esri is always current)
+  //   • Purple/indigo blending artefact when layers composited on dark bg
+  // NASA GIBS WELD removed because it has NO coverage over Ghana/West Africa
+  //   → every tile returned 404, flooding the console.
+  //
+  // Now: Sentinel proxy ONLY. The proxy returns:
+  //   • A real 512×512 PNG of the requested year (Sentinel-2, Landsat-8, or TM)
+  //   • A transparent 1×1 PNG if credentials missing / window has no clear data
+  // MapLibre background colour is set to white so "no data" areas are clearly
+  // white, not blue-ocean or colour-tinted.
   var sentinelTileUrl = '/api/sentinel-tile-proxy?z={z}&x={x}&y={y}&year=' + y + '&width=512&height=512';
-  sources['sentinel_proxy'] = {
-    type: 'raster',
-    tiles: [sentinelTileUrl],
-    tileSize: 512,
-    attribution: _getSatSourceLabel(y),
-    maxzoom: 18,
-    minzoom: 4  // Don't request Sentinel at very low zooms — WELD/Esri handle those
-  };
-  layers.push({ id: 'sentinel-proxy-layer', type: 'raster', source: 'sentinel_proxy',
-    paint: { 'raster-opacity': 1.0 } });
-
   return {
     version: 8,
     glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
-    sources: sources,
-    layers: layers
+    // White background so transparent "no-data" tiles show as white, not blue
+    background: [{ id: 'background', type: 'background', paint: { 'background-color': '#ffffff' } }],
+    sources: {
+      sentinel_proxy: {
+        type: 'raster',
+        tiles: [sentinelTileUrl],
+        tileSize: 512,
+        attribution: _getSatSourceLabel(y),
+        maxzoom: 18,
+        minzoom: 1
+      }
+    },
+    layers: [
+      // Plain white background — eliminates dark-blue MapLibre ocean
+      { id: 'bg-white', type: 'background', paint: { 'background-color': '#ffffff' } },
+      // Raw satellite imagery — no opacity, no filter, no colour treatment
+      { id: 'sentinel-proxy-layer', type: 'raster', source: 'sentinel_proxy',
+        paint: { 'raster-opacity': 1.0 } }
+    ]
   };
 }
 

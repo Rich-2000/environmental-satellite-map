@@ -2,11 +2,7 @@
  * api/sentinel-token.js — v4 PRODUCTION
  * ═══════════════════════════════════════════════════════════════════
  * Fetches a Copernicus Data Space (CDSE) OAuth2 token.
- *
- * v4 changes:
- *   - Accepts GET, POST, OPTIONS
- *   - GET is the primary method (browser fetch now uses GET)
- *   - Adds proper cache headers so browser won't hammer this endpoint
+ * Accepts GET, POST, OPTIONS. Adds proper cache headers.
  * ═══════════════════════════════════════════════════════════════════
  */
 

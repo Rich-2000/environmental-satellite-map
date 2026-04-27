@@ -1,20 +1,24 @@
 /**
- * api/sentinel-tile-proxy.js  — v8 PRODUCTION
+ * api/sentinel-tile-proxy.js — v7 PRODUCTION
  * ════════════════════════════════════════════════════════════════════════════
  * Sentinel Hub Process API tile proxy for MapLibre GL.
  *
- * KEY FIXES in v8 vs v7:
- *   1. Sends X-Sentinel-Status header on every response so the frontend health
- *      check can distinguish real imagery from fallback transparents.
- *      Values: 'ok' | 'no-credentials' | 'auth-failed' | 'no-data' | 'error'
- *   2. sendTransparent now accepts a status param to set the right header.
+ * Supports three Copernicus datasets, auto-selected by year:
+ *   • sentinel-2-l2a   : 2015 → present   (10 m, true colour)
+ *   • landsat-ot-l2    : 2013 → 2015      (30 m, Landsat-8 OLI)
+ *   • landsat-tm-l1    : pre-2013          (30 m, Landsat-4/5 TM)
  *
- * URL (query-params only — Vercel rewrites drop path params):
- *   /api/sentinel-tile-proxy?z={z}&x={x}&y={y}&year=2022&width=512&height=512
+ * Dry-season windows (harmattan = Nov–Mar, minimal cloud over Ghana) are
+ * tried in order — first window with imagery wins.
+ * Falls back to a transparent 1×1 PNG (never a 4xx/5xx) so MapLibre
+ * never renders a broken tile.
+ *
+ * URL: /api/sentinel-tile-proxy?z={z}&x={x}&y={y}&year=2022&width=512&height=512
  *
  * ENV VARS (Vercel → Settings → Environment Variables):
  *   SENTINEL_CLIENT_ID      — "sh-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
  *   SENTINEL_CLIENT_SECRET  — your CDSE OAuth client secret
+ *   Regenerate at: dataspace.copernicus.eu → Sign In → User Settings → OAuth Clients
  */
 
 let _cachedToken = null;
@@ -32,10 +36,15 @@ function tile2bbox(z, x, y) {
 async function getCDSEToken(clientId, clientSecret) {
   const now = Date.now();
   if (_cachedToken && _tokenExpiry > now + 30_000) return _cachedToken;
-  const body = new URLSearchParams({ grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret });
-  const res = await fetch('https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token', {
-    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString(),
+  const body = new URLSearchParams({
+    grant_type: 'client_credentials',
+    client_id: clientId,
+    client_secret: clientSecret
   });
+  const res = await fetch(
+    'https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token',
+    { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() }
+  );
   if (!res.ok) throw new Error(`CDSE token ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const data = await res.json();
   _cachedToken = data.access_token;
@@ -43,6 +52,7 @@ async function getCDSEToken(clientId, clientSecret) {
   return _cachedToken;
 }
 
+// ── Evalscripts ─────────────────────────────────────────────────────────────
 const EVAL_S2 = `//VERSION=3
 function setup(){return{input:[{bands:["B02","B03","B04","dataMask"],units:"DN"}],output:{bands:4,sampleType:"UINT8"}};}
 function evaluatePixel(s){
@@ -74,31 +84,35 @@ function getDataset(year) {
                              return { type: 'landsat-tm-l1',   evalscript: EVAL_TM,  label: 'L45-TM-L1', maxCC: 50 };
 }
 
-// Dry-season windows for Accra/Ghana (harmattan = Nov–Mar, minimal cloud cover).
+// Dry-season windows for Accra/Ghana (harmattan = Nov–Mar, minimal cloud).
+// Tried in order — first window with imagery wins.
 function getDateWindows(yrN) {
   const now      = new Date();
   const thisYear = now.getFullYear();
   if (yrN >= thisYear) {
+    // Current year — use safe window ending 30 days ago
     const safe = new Date(now.getTime() - 30 * 86400000);
     return [{ from: `${yrN}-01-01T00:00:00Z`, to: safe.toISOString().split('T')[0] + 'T23:59:59Z' }];
   }
   return [
-    { from: `${yrN}-12-01T00:00:00Z`, to: `${yrN}-12-31T23:59:59Z` },
-    { from: `${yrN}-01-01T00:00:00Z`, to: `${yrN}-02-28T23:59:59Z` },
-    { from: `${yrN}-11-01T00:00:00Z`, to: `${yrN}-11-30T23:59:59Z` },
-    { from: `${yrN}-03-01T00:00:00Z`, to: `${yrN}-03-31T23:59:59Z` },
-    { from: `${yrN}-01-01T00:00:00Z`, to: `${yrN}-12-31T23:59:59Z` },
+    { from: `${yrN}-12-01T00:00:00Z`, to: `${yrN}-12-31T23:59:59Z` },  // Peak dry season Dec
+    { from: `${yrN}-01-01T00:00:00Z`, to: `${yrN}-02-28T23:59:59Z` },  // Jan-Feb (after harmattan)
+    { from: `${yrN}-11-01T00:00:00Z`, to: `${yrN}-11-30T23:59:59Z` },  // Nov onset
+    { from: `${yrN}-03-01T00:00:00Z`, to: `${yrN}-03-31T23:59:59Z` },  // Early Mar
+    { from: `${yrN}-01-01T00:00:00Z`, to: `${yrN}-12-31T23:59:59Z` },  // Full year fallback
   ];
 }
 
-const TRANSPARENT_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+const TRANSPARENT_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+  'base64'
+);
 
-function sendTransparent(res, label, yr, z, x, y, status = 'no-data') {
-  console.log(`[tile-proxy] transparent(${status}): ${label} ${yr} ${z}/${x}/${y}`);
-  res.setHeader('Content-Type',        'image/png');
-  res.setHeader('Cache-Control',       'public, max-age=3600');
-  res.setHeader('X-No-Data',           'true');
-  res.setHeader('X-Sentinel-Status',   status);
+function sendTransparent(res, label, yr, z, x, y) {
+  console.log(`[tile-proxy] transparent: ${label} ${yr} ${z}/${x}/${y}`);
+  res.setHeader('Content-Type', 'image/png');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.setHeader('X-No-Data', 'true');
   return res.status(200).send(TRANSPARENT_PNG);
 }
 
@@ -112,30 +126,35 @@ export default async function handler(req, res) {
   const clientId     = process.env.SENTINEL_CLIENT_ID;
   const clientSecret = process.env.SENTINEL_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
-    const missing = [!clientId ? 'SENTINEL_CLIENT_ID' : null, !clientSecret ? 'SENTINEL_CLIENT_SECRET' : null].filter(Boolean).join(', ');
-    // Return transparent tile (not JSON error) so MapLibre doesn't break —
-    // but set X-Sentinel-Status so the health check knows why.
-    res.setHeader('X-Sentinel-Status', 'no-credentials');
-    res.setHeader('X-Missing-Vars', missing);
-    res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Cache-Control', 'no-store');
-    return res.status(200).send(TRANSPARENT_PNG);
+    const missing = [!clientId ? 'SENTINEL_CLIENT_ID' : null, !clientSecret ? 'SENTINEL_CLIENT_SECRET' : null]
+      .filter(Boolean).join(', ');
+    return res.status(500).json({
+      error:  `Missing env vars: ${missing}`,
+      hint:   'Set in Vercel → Project → Settings → Environment Variables, then redeploy.',
+      how_to: 'Generate at dataspace.copernicus.eu → Sign In → User Settings → OAuth Clients',
+    });
   }
 
   let z = parseInt(req.query.z, 10);
   let x = parseInt(req.query.x, 10);
   let y = parseInt(req.query.y, 10);
 
+  // Fallback: parse z/x/y from path if query params are missing
   if (isNaN(z)) {
     const parts = (req.url || '').split('?')[0].split('/').filter(Boolean);
     const idx   = parts.findIndex(p => p === 'sentinel-tile-proxy');
     if (idx !== -1 && parts.length >= idx + 4) {
-      z = parseInt(parts[idx + 1], 10); x = parseInt(parts[idx + 2], 10); y = parseInt(parts[idx + 3], 10);
+      z = parseInt(parts[idx + 1], 10);
+      x = parseInt(parts[idx + 2], 10);
+      y = parseInt(parts[idx + 3], 10);
     }
   }
 
   if (isNaN(z) || isNaN(x) || isNaN(y) || z < 0 || z > 22) {
-    return res.status(400).json({ error: 'Invalid tile coords. Use ?z=N&x=N&y=N', received: { z: req.query.z, x: req.query.x, y: req.query.y } });
+    return res.status(400).json({
+      error: 'Invalid tile coords. Use ?z=N&x=N&y=N',
+      received: { z: req.query.z, x: req.query.x, y: req.query.y }
+    });
   }
 
   const yr   = req.query.year || String(new Date().getFullYear());
@@ -151,7 +170,11 @@ export default async function handler(req, res) {
   } catch (authErr) {
     _cachedToken = null; _tokenExpiry = 0;
     console.error('[tile-proxy] Auth error:', authErr.message);
-    return sendTransparent(res, ds.label, yrN, z, x, y, 'auth-failed');
+    return res.status(401).json({
+      error:  'CDSE authentication failed',
+      detail: authErr.message.slice(0, 300),
+      hint:   'Regenerate credentials at dataspace.copernicus.eu → User Settings → OAuth Clients',
+    });
   }
 
   for (const win of getDateWindows(yrN)) {
@@ -159,26 +182,46 @@ export default async function handler(req, res) {
     try {
       r = await fetch('https://sh.dataspace.copernicus.eu/api/v1/process', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'Accept': 'image/png,image/*,*/*' },
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${token}`,
+          'Accept':        'image/png,image/*,*/*'
+        },
         body: JSON.stringify({
           input: {
-            bounds: { bbox: [bbox.minLon, bbox.minLat, bbox.maxLon, bbox.maxLat], properties: { crs: 'http://www.opengis.net/def/crs/EPSG/0/4326' } },
-            data: [{ type: ds.type, dataFilter: { timeRange: { from: win.from, to: win.to }, maxCloudCoverage: ds.maxCC, mosaickingOrder: 'leastCC' } }],
+            bounds: {
+              bbox: [bbox.minLon, bbox.minLat, bbox.maxLon, bbox.maxLat],
+              properties: { crs: 'http://www.opengis.net/def/crs/EPSG/0/4326' }
+            },
+            data: [{
+              type: ds.type,
+              dataFilter: {
+                timeRange:       { from: win.from, to: win.to },
+                maxCloudCoverage: ds.maxCC,
+                mosaickingOrder: 'leastCC'
+              }
+            }],
           },
-          output: { width: w, height: h, responses: [{ identifier: 'default', format: { type: 'image/png' } }] },
+          output: {
+            width: w, height: h,
+            responses: [{ identifier: 'default', format: { type: 'image/png' } }]
+          },
           evalscript: ds.evalscript,
         }),
       });
     } catch (fetchErr) {
-      console.error(`[tile-proxy] fetch error:`, fetchErr.message);
-      return sendTransparent(res, ds.label, yrN, z, x, y, 'error');
+      console.error('[tile-proxy] fetch error:', fetchErr.message);
+      return sendTransparent(res, ds.label, yrN, z, x, y);
     }
 
     if (r.status === 401 || r.status === 403) {
       _cachedToken = null; _tokenExpiry = 0;
       const txt = await r.text().catch(() => '');
       console.error(`[tile-proxy] Auth ${r.status}:`, txt.slice(0, 200));
-      return sendTransparent(res, ds.label, yrN, z, x, y, 'auth-failed');
+      return res.status(r.status).json({
+        error: 'Sentinel auth failed — credentials expired',
+        hint:  'Regenerate at dataspace.copernicus.eu → User Settings → OAuth Clients'
+      });
     }
 
     if (r.status === 400 || r.status === 422) {
@@ -202,16 +245,15 @@ export default async function handler(req, res) {
     const pu  = r.headers.get('x-processingunits-spent') || '?';
     console.log(`[tile-proxy] ✓ ${ds.label} yr=${yrN} z=${z}/${x}/${y} win=${win.from.slice(0,10)} PU:${pu} bytes:${buf.byteLength}`);
 
-    res.setHeader('Content-Type',        'image/png');
-    res.setHeader('Cache-Control',       'public, max-age=86400, stale-while-revalidate=604800');
-    res.setHeader('X-Dataset',           ds.label);
-    res.setHeader('X-Year',              String(yrN));
-    res.setHeader('X-PU-Spent',          pu);
-    res.setHeader('X-Sentinel-Status',   'ok');   // ← CRITICAL: tells health check imagery is real
+    res.setHeader('Content-Type',  'image/png');
+    res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+    res.setHeader('X-Dataset',     ds.label);
+    res.setHeader('X-Year',        String(yrN));
+    res.setHeader('X-PU-Spent',    pu);
     return res.status(200).send(Buffer.from(buf));
   }
 
-  // All windows exhausted — no imagery found for this tile/year
+  // All windows exhausted — return transparent tile
   console.log(`[tile-proxy] All windows exhausted: ${ds.label} yr=${yrN} ${z}/${x}/${y}`);
-  return sendTransparent(res, ds.label, yrN, z, x, y, 'no-data');
+  return sendTransparent(res, ds.label, yrN, z, x, y);
 }

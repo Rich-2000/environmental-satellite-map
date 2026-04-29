@@ -1319,19 +1319,12 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
   width:100%;
   height:100%;
 }
-#split-slider-from {
-  position:absolute;inset:0;
-}
-#split-slider-to {
-  position:absolute;inset:0;
-  /* clip-path applied via JS directly on the WebGL canvas */
-}
 #split-slider-handle {
   position:absolute;top:0;bottom:0;
   left:50%;transform:translateX(-50%);
   width:4px;
   background:linear-gradient(to bottom,var(--accent2),var(--accent),var(--accent2));
-  z-index:10;
+  z-index:20;
   cursor:ew-resize;
   box-shadow:0 0 12px rgba(6,201,232,.5);
 }
@@ -1373,16 +1366,31 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
   backdrop-filter:blur(12px);white-space:nowrap;
   box-shadow:0 2px 12px rgba(0,0,0,.5);
 }
+/* ── Split view layer strategy (MapLibre Compare pattern) ──────────────────
+   FROM map: z-index:2, clipped on RIGHT → only left portion visible + interactive
+   TO map:   z-index:1, full size → right portion naturally exposed, fully interactive
+   Result: each map only receives pointer events in its own visible half.
+   clip-path on FROM clips BOTH visually AND pointer events simultaneously.
+   ────────────────────────────────────────────────────────────────────────── */
+#split-slider-from {
+  position:absolute;inset:0;
+  z-index:2;               /* on top — but only covers left half via clip */
+  pointer-events:auto;
+}
+#split-slider-to {
+  position:absolute;inset:0;
+  z-index:1;               /* below — right half exposed because FROM is clipped */
+  pointer-events:auto;
+}
+/* Both map containers fill their parent */
 #split-slider-from-map,
 #split-slider-to-map {
   position:absolute;inset:0;
-  width:100%;
-  height:100%;
-  overflow:visible;
+  width:100%;height:100%;
+  overflow:hidden;
+  background:#000;
 }
-#split-slider-to-map canvas {
-  /* JS will set clip-path here directly */
-}
+/* Handle floats above both maps — z-index set in main rule above */
 #split-sentinel-status {
   position:absolute;bottom:12px;right:14px;z-index:12;
   background:rgba(5,13,18,.9);
@@ -2673,7 +2681,7 @@ function getNASATileDate(year, product){
     // Historical: April anchor (dry season, minimal cloud cover for Accra)
     if(product === 'ndvi'){
       // Closest 8-day DOY to April 6 (DOY 97 = April 7 approx, confirmed tile)
-      return `${clampedYear}-04-06`;
+      return `${clampedYear}-04-07`;
     } else {
       return `${clampedYear}-04-01`;
     }
@@ -2690,12 +2698,12 @@ function initLayers(){
 
   // True-color: init at current year's April composite (syncYear will update it)
   const _initTCDate=getNASATileDate(curYear,'tc');
-  map.addSource('nasa-tc',{type:'raster',tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${_initTCDate}/GoogleMapsCompatible/{z}/{y}/{x}.jpg`],tileSize:256,attribution:'NASA GIBS',maxzoom:9,minzoom:1});
+  map.addSource('nasa-tc',{type:'raster',tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${_initTCDate}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`],tileSize:256,attribution:'NASA GIBS',maxzoom:9,minzoom:1});
   map.addLayer({id:'nasa-tc-lyr',type:'raster',source:'nasa-tc',paint:{'raster-opacity':LS.satellite?0.55:0}});
 
   // NDVI: compute the latest available 8-day composite date dynamically
   const _initNDVIDate=getNASATileDate(curYear,'ndvi');
-  map.addSource('nasa-ndvi',{type:'raster',tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_NDVI_8Day/default/${_initNDVIDate}/GoogleMapsCompatible/{z}/{y}/{x}.png`],tileSize:256,attribution:'NASA GIBS NDVI',maxzoom:9,minzoom:1});
+  map.addSource('nasa-ndvi',{type:'raster',tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_NDVI_8Day/default/${_initNDVIDate}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.png`],tileSize:256,attribution:'NASA GIBS NDVI',maxzoom:9,minzoom:1});
   map.addLayer({id:'ndvi-lyr',type:'raster',source:'nasa-ndvi',paint:{'raster-opacity':LS.ndvi?0.8:0}});
 
   addGeojsonLayers('urban',URBAN_ZONES.map(z=>({type:'Feature',properties:{n:z.n,era:z.era,sev:z.sev},geometry:{type:'Polygon',coordinates:[z.c]}})));
@@ -2867,7 +2875,7 @@ function syncYear(y,skipTiles=false){
     if(map.getLayer('nasa-tc-lyr'))map.removeLayer('nasa-tc-lyr');
     if(map.getSource('nasa-tc'))map.removeSource('nasa-tc');
     map.addSource('nasa-tc',{type:'raster',
-      tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${tileDate}/GoogleMapsCompatible/{z}/{y}/{x}.jpg`],
+      tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${tileDate}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`],
       tileSize:256,attribution:'NASA GIBS',maxzoom:9,minzoom:1
     });
     map.addLayer({id:'nasa-tc-lyr',type:'raster',source:'nasa-tc',paint:{'raster-opacity':LS.satellite?0.55:0}});
@@ -2877,7 +2885,7 @@ function syncYear(y,skipTiles=false){
     if(map.getLayer('ndvi-lyr'))map.removeLayer('ndvi-lyr');
     if(map.getSource('nasa-ndvi'))map.removeSource('nasa-ndvi');
     map.addSource('nasa-ndvi',{type:'raster',
-      tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_NDVI_8Day/default/${ndviDate}/GoogleMapsCompatible/{z}/{y}/{x}.png`],
+      tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_NDVI_8Day/default/${ndviDate}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.png`],
       tileSize:256,attribution:'NASA GIBS NDVI',maxzoom:9,minzoom:1
     });
     map.addLayer({id:'ndvi-lyr',type:'raster',source:'nasa-ndvi',paint:{'raster-opacity':LS.ndvi?0.8:0}});
@@ -5583,60 +5591,55 @@ function _modisDateForYear(year) {
 function uwBuildYearStyle(year) {
   var y = parseInt(year, 10) || new Date().getFullYear();
 
-  // Pre-2000: no free satellite archive. Clamp to 2000 Landsat WELD baseline.
-  // The working platform's AVAILABLE_YEARS starts at 2000 for this reason.
-  // Our UI exposes 1980-1999 for chart/data but there are no tile archives.
+  // Pre-2000: clamp to 2000 — no free tile archive exists before this.
   if (y < 2000) {
     var statusEl = document.getElementById('split-sentinel-status');
-    if (statusEl) statusEl.textContent = 'No satellite tiles before 2000 — showing 2000 Landsat WELD as earliest baseline';
-    if (typeof uwToast === 'function') {
+    if (statusEl) statusEl.textContent =
+      'No satellite tiles before 2000 — showing 2000 Landsat WELD as earliest baseline';
+    if (typeof uwToast === 'function')
       uwToast('No satellite archive before 2000 — showing earliest available (2000)', 'info');
-    }
     y = 2000;
   }
 
-  // ── Sentinel / Landsat Process API (2013+) ────────────────────────────────
+  // Base Esri World Imagery — always present, fills gaps at all zoom levels.
+  // This is the stable foundation that prevents blank/purple backgrounds.
+  var esriBase = {
+    type: 'raster',
+    tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+    tileSize: 256, maxzoom: 19,
+    attribution: 'Esri World Imagery'
+  };
+
+  // ── Tier 1: Sentinel-2 / Landsat-8 (2013+) ──────────────────────────────
+  // Each year gets a distinct /api/sentinel-tile-proxy?year=Y endpoint.
+  // The proxy uses the dry-season window {Y}-11-01 → {Y+1}-03-31 with leastCC
+  // mosaic, so every year returns genuinely different dated imagery.
+  //
+  // NO wayback_yr layer here — it caused purple bleed when Sentinel tiles
+  // loaded slower than Wayback tiles (different hue showed through at opacity).
+  // Esri base fills the gap cleanly with no color artifacts.
   if (y >= 2013) {
-    var sentinelTileUrl =
-      '/api/sentinel-tile-proxy?z={z}&x={x}&y={y}&year=' + y + '&width=256&height=256';
-
-    var itemId = getWaybackItemId(y);
-    var waybackTiles = itemId
-      ? ['/api/wayback-proxy?itemId=' + itemId + '&z={z}&y={y}&x={x}']
-      : ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'];
-
     return {
       version: 8,
       glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
       sources: {
-        esri_base: {
-          type: 'raster',
-          tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-          tileSize: 256, maxzoom: 19,
-          attribution: 'Esri World Imagery'
-        },
-        wayback_yr: {
-          type: 'raster',
-          tiles: waybackTiles,
-          tileSize: 256, maxzoom: 19,
-          attribution: 'Esri Wayback ' + y
-        },
-        sentinel_yr: {
-          type: 'raster',
-          tiles: [sentinelTileUrl],
-          tileSize: 256, maxzoom: 14, minzoom: 6,
-          attribution: (y >= 2015 ? 'Copernicus Sentinel-2 L2A' : 'Copernicus Landsat-8') + ' ' + y
-        }
+        esri_base:   { type:'raster', tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], tileSize:256, maxzoom:19, attribution:'Esri World Imagery' },
+        sentinel_yr: { type:'raster', tiles:['/api/sentinel-tile-proxy?z={z}&x={x}&y={y}&year='+y+'&width=256&height=256'], tileSize:256, maxzoom:14, minzoom:1, attribution:(y>=2015?'Copernicus Sentinel-2 L2A':'Copernicus Landsat-8 OLI')+' '+y }
       },
       layers: [
-        { id: 'esri-base',   type: 'raster', source: 'esri_base',   paint: { 'raster-opacity': 1.0 } },
-        { id: 'wayback-yr',  type: 'raster', source: 'wayback_yr',  paint: { 'raster-opacity': 0.92 } },
-        { id: 'sentinel-yr', type: 'raster', source: 'sentinel_yr', paint: { 'raster-opacity': 1.0 } }
+        { id:'esri-base',   type:'raster', source:'esri_base',   paint:{'raster-opacity':1.0} },
+        { id:'sentinel-yr', type:'raster', source:'sentinel_yr', paint:{'raster-opacity':1.0},
+          // Fade in smoothly as tiles arrive — prevents flash of empty tiles
+          layout:{} }
       ]
     };
   }
 
-  // ── GIBS Landsat WELD + MODIS (2000-2012) ────────────────────────────────
+  // ── Tier 2: GIBS Landsat WELD annual composites (2000–2012) ─────────────
+  // Real 30m Landsat, one composite per calendar year.
+  // WELD is available 2000–2019 from NASA GIBS — completely free, no auth.
+  // For 2000-2012 we layer WELD on top of MODIS TC for low-zoom context,
+  // and WELD at zoom ≤12 for medium zoom sharp detail.
   var weldDate  = _weldDateForYear(y);
   var modisDate = _modisDateForYear(y);
 
@@ -5644,29 +5647,14 @@ function uwBuildYearStyle(year) {
     version: 8,
     glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
     sources: {
-      esri_base: {
-        type: 'raster',
-        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-        tileSize: 256, maxzoom: 19,
-        attribution: 'Esri World Imagery'
-      },
-      gibs_weld: {
-        type: 'raster',
-        tiles: ['https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/Landsat_WELD_CorrectedReflectance_TrueColor_Global_Annual/default/' + weldDate + '/GoogleMapsCompatible_Level12/{z}/{y}/{x}.jpg'],
-        tileSize: 256, maxzoom: 12, minzoom: 1,
-        attribution: 'NASA GIBS Landsat WELD ' + weldDate
-      },
-      gibs_modis: {
-        type: 'raster',
-        tiles: ['https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/' + modisDate + '/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg'],
-        tileSize: 256, maxzoom: 9, minzoom: 1,
-        attribution: 'NASA GIBS MODIS Terra ' + modisDate
-      }
+      esri_base: { type:'raster', tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], tileSize:256, maxzoom:19, attribution:'Esri World Imagery' },
+      gibs_weld: { type:'raster', tiles:['https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/Landsat_WELD_CorrectedReflectance_TrueColor_Global_Annual/default/'+weldDate+'/GoogleMapsCompatible_Level12/{z}/{y}/{x}.jpg'], tileSize:256, maxzoom:12, minzoom:1, attribution:'NASA GIBS Landsat WELD '+weldDate },
+      gibs_modis:{ type:'raster', tiles:['https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/'+modisDate+'/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg'],  tileSize:256, maxzoom:9,  minzoom:1, attribution:'NASA GIBS MODIS Terra '+modisDate }
     },
     layers: [
-      { id: 'esri-base',  type: 'raster', source: 'esri_base',  paint: { 'raster-opacity': 1.0 } },
-      { id: 'gibs-modis', type: 'raster', source: 'gibs_modis', paint: { 'raster-opacity': 0.95 }, maxzoom: 10 },
-      { id: 'gibs-weld',  type: 'raster', source: 'gibs_weld',  paint: { 'raster-opacity': 1.0 } }
+      { id:'esri-base',  type:'raster', source:'esri_base',  paint:{'raster-opacity':1.0} },
+      { id:'gibs-modis', type:'raster', source:'gibs_modis', paint:{'raster-opacity':0.95}, maxzoom:10 },
+      { id:'gibs-weld',  type:'raster', source:'gibs_weld',  paint:{'raster-opacity':1.0}  }
     ]
   };
 }
@@ -5799,36 +5787,49 @@ function uwOpenSplitView() {
   var mapCenter = zone ? zone.center : ACCRA_CENTER;
   var mapZoom   = zone ? Math.min(zone.zoom, 14) : 12;
 
-  if(splitState.mapFrom) { try{splitState.mapFrom.remove();}catch(e){} splitState.mapFrom = null; }
-  if(splitState.mapTo)   { try{splitState.mapTo.remove();}catch(e){}   splitState.mapTo   = null; }
+  // ── Proper WebGL cleanup — must remove() before re-creating ──────────────
+  if(splitState.mapFrom) {
+    try { splitState.mapFrom.remove(); } catch(e){}
+    splitState.mapFrom = null;
+  }
+  if(splitState.mapTo) {
+    try { splitState.mapTo.remove(); } catch(e){}
+    splitState.mapTo = null;
+  }
 
   var fromMapEl = document.getElementById('split-slider-from-map');
   var toMapEl   = document.getElementById('split-slider-to-map');
-  if(!fromMapEl || !toMapEl) {
-    uwToast('Split view DOM not ready', 'error'); return;
-  }
+  if(!fromMapEl || !toMapEl) { uwToast('Split view DOM not ready','error'); return; }
+
+  // Clear containers for fresh MapLibre init
   fromMapEl.innerHTML = '';
   toMapEl.innerHTML   = '';
 
+  // Reset slider
+  _splitSlider.pct = 50;
+  _splitSlider.initialized = false;
+
   var sentinelStatus = document.getElementById('split-sentinel-status');
-  if(sentinelStatus) sentinelStatus.textContent = '🛰 Fetching imagery sources…';
+  if(sentinelStatus) sentinelStatus.textContent = '🛰 Loading ' + _srcLabel(fromY) + ' vs ' + _srcLabel(toY) + '…';
 
-  // Preload Wayback vintages (async live config fetch, falls back to hardcoded)
-  _loadWaybackVintages();
+  _loadWaybackVintages(); // async, falls back to hardcoded immediately
 
-  // Build independently dated styles — FROM and TO hit different tile endpoints
+  // Each year builds a unique MapLibre style pointing at a different tile endpoint
   var fromStyle = uwBuildYearStyle(fromY);
   var toStyle   = uwBuildYearStyle(toY);
 
-  if(sentinelStatus) sentinelStatus.textContent = '🛰 ' + _srcLabel(fromY) + '  vs  ' + _srcLabel(toY);
-
+  // ── MapLibre init options ─────────────────────────────────────────────────
   var commonOpts = {
-    center: mapCenter, zoom: mapZoom,
-    pitch: 0, bearing: 0,
-    interactive: true,
-    attributionControl: false,
+    center:                mapCenter,
+    zoom:                  mapZoom,
+    pitch:                 0,
+    bearing:               0,
+    interactive:           true,       // BOTH maps must be fully interactive
+    attributionControl:    false,
     preserveDrawingBuffer: true,
-    fadeDuration: 0
+    fadeDuration:          200,        // smooth tile fade, prevents white flash
+    maxTileCacheSize:      150,
+    trackResize:           true
   };
 
   splitState.mapFrom = new maplibregl.Map(Object.assign({}, commonOpts, {
@@ -5838,46 +5839,73 @@ function uwOpenSplitView() {
     container: toMapEl, style: toStyle
   }));
 
-  // Sync both maps — dragging either one moves the other (same location, different year)
-  var _sync = false;
-  splitState.mapFrom.on('move', function() {
-    if(_sync) return; _sync = true;
-    try { splitState.mapTo.jumpTo({
-      center: splitState.mapFrom.getCenter(), zoom: splitState.mapFrom.getZoom(),
-      bearing: splitState.mapFrom.getBearing(), pitch: splitState.mapFrom.getPitch()
-    }); } catch(e){}
-    _sync = false;
-  });
-  splitState.mapTo.on('move', function() {
-    if(_sync) return; _sync = true;
-    try { splitState.mapFrom.jumpTo({
-      center: splitState.mapTo.getCenter(), zoom: splitState.mapTo.getZoom(),
-      bearing: splitState.mapTo.getBearing(), pitch: splitState.mapTo.getPitch()
-    }); } catch(e){}
-    _sync = false;
-  });
+  // Navigation controls on each map (zoom + / -)
+  splitState.mapFrom.addControl(new maplibregl.NavigationControl({showCompass:false}), 'bottom-left');
+  splitState.mapTo.addControl(  new maplibregl.NavigationControl({showCompass:false}), 'bottom-right');
 
+  // ── rAF-debounced sync to prevent move-event deadlock ────────────────────
+  // Without requestAnimationFrame, each jumpTo() fires a move event which
+  // triggers the other map's jumpTo — causing an infinite loop that locks
+  // both maps and makes the TO map appear unresponsive to zoom/pan.
+  var _syncLock = false;
+  var _syncRAF  = null;
+
+  function _syncFT() {
+    if(_syncLock) return;
+    _syncLock = true;
+    if(_syncRAF) cancelAnimationFrame(_syncRAF);
+    _syncRAF = requestAnimationFrame(function() {
+      if(splitState.mapTo && splitState.mapFrom) {
+        try { splitState.mapTo.jumpTo({
+          center: splitState.mapFrom.getCenter(), zoom: splitState.mapFrom.getZoom(),
+          bearing: splitState.mapFrom.getBearing(), pitch: splitState.mapFrom.getPitch()
+        }); } catch(e){}
+      }
+      _syncLock = false;
+    });
+  }
+  function _syncTF() {
+    if(_syncLock) return;
+    _syncLock = true;
+    if(_syncRAF) cancelAnimationFrame(_syncRAF);
+    _syncRAF = requestAnimationFrame(function() {
+      if(splitState.mapFrom && splitState.mapTo) {
+        try { splitState.mapFrom.jumpTo({
+          center: splitState.mapTo.getCenter(), zoom: splitState.mapTo.getZoom(),
+          bearing: splitState.mapTo.getBearing(), pitch: splitState.mapTo.getPitch()
+        }); } catch(e){}
+      }
+      _syncLock = false;
+    });
+  }
+  splitState.mapFrom.on('move', _syncFT);
+  splitState.mapTo.on('move',   _syncTF);
+
+  // ── Both-loaded handler ───────────────────────────────────────────────────
   var _fromLoaded = false, _toLoaded = false;
   function _onBothLoaded() {
     if(!_fromLoaded || !_toLoaded) return;
+    if(sentinelStatus) sentinelStatus.textContent = '🛰 ' + _srcLabel(fromY) + '  vs  ' + _srcLabel(toY);
     _initSplitSlider();
-    setTimeout(function(){ _initSplitSlider(); }, 300);
+    setTimeout(function(){ _initSplitSlider(); }, 400);
     setTimeout(function(){
       addRiversToSplitMap(splitState.mapFrom, fromY);
-      addRiversToSplitMap(splitState.mapTo, toY);
-    }, 600);
-    // Remove any legacy CSS filter — real dated imagery needs no artificial treatment
-    var fromCanvas = fromMapEl.querySelector('canvas');
-    var toCanvas   = toMapEl.querySelector('canvas');
-    if(fromCanvas) fromCanvas.style.filter = '';
-    if(toCanvas)   toCanvas.style.filter   = '';
-    if(sentinelStatus) sentinelStatus.textContent = '🛰 ' + _srcLabel(fromY) + '  vs  ' + _srcLabel(toY);
+      addRiversToSplitMap(splitState.mapTo,   toY);
+    }, 700);
+    // Clear any leftover canvas filters
+    [fromMapEl, toMapEl].forEach(function(el) {
+      var c = el && el.querySelector('canvas');
+      if(c) { c.style.filter = ''; c.style.opacity = ''; }
+    });
   }
   splitState.mapFrom.on('load', function(){ _fromLoaded = true; _onBothLoaded(); uwCheckBothMapsReady(); });
   splitState.mapTo.on('load',   function(){ _toLoaded   = true; _onBothLoaded(); uwCheckBothMapsReady(); });
 
-  // Fallback: proceed after 8s if load events are slow
-  setTimeout(function(){ _fromLoaded = true; _toLoaded = true; _onBothLoaded(); _initSplitSlider(); }, 8000);
+  // 10s fallback if tile server is slow
+  setTimeout(function(){
+    if(!_fromLoaded || !_toLoaded) { _fromLoaded = true; _toLoaded = true; _onBothLoaded(); }
+    _initSplitSlider();
+  }, 10000);
 
   _initSplitSlider();
   _attachSplitClickHandlers();
@@ -5899,38 +5927,71 @@ function _initSplitSlider() {
   var handle = document.getElementById('split-slider-handle');
   if(!wrap || !handle) return;
 
-  // Remove old listeners
+  // ── Clean up old listeners ────────────────────────────────────────────────
+  var oldListeners = ['_mousemove','_mouseup','_touchmove','_touchend'];
+  oldListeners.forEach(function(k) {
+    if(_splitSlider[k]) {
+      var evtType = k.replace('_','').replace('move','move').replace('up','up').replace('end','end');
+      document.removeEventListener(evtType.replace('mouse','mouse').replace('touch','touch'), _splitSlider[k]);
+      _splitSlider[k] = null;
+    }
+  });
   if(_splitSlider._mousemove)  { document.removeEventListener('mousemove', _splitSlider._mousemove); _splitSlider._mousemove = null; }
   if(_splitSlider._mouseup)    { document.removeEventListener('mouseup',   _splitSlider._mouseup);   _splitSlider._mouseup   = null; }
   if(_splitSlider._touchmove)  { document.removeEventListener('touchmove', _splitSlider._touchmove); _splitSlider._touchmove = null; }
   if(_splitSlider._touchend)   { document.removeEventListener('touchend',  _splitSlider._touchend);  _splitSlider._touchend  = null; }
 
-  var pct = _splitSlider.pct || 50;
+  var pct = _splitSlider.pct != null ? _splitSlider.pct : 50;
 
+  // ── applyPct: clips the TO map container (not the canvas) ─────────────────
+  // Clipping the CONTAINER instead of the WebGL canvas avoids:
+  //   1. Canvas recreation (MapLibre sometimes recreates the canvas on resize)
+  //   2. WebGL clip-path instability across browser versions
+  // The FROM map sits at full width behind; the TO container is clipped
+  // to only show its right portion. Both maps remain fully interactive.
   function applyPct(p) {
-    pct = Math.max(2, Math.min(98, p));
+    pct = Math.max(1, Math.min(99, p));
     _splitSlider.pct = pct;
-    // KEY FIX: clip the WebGL canvas directly — CSS clip on the container div
-    // does NOT propagate to its WebGL canvas child in all browsers.
-    var toMapEl = document.getElementById('split-slider-to-map');
-    if(toMapEl) {
-      toMapEl.style.clipPath = 'inset(0 0 0 ' + pct + '%)';
-      var canvas = toMapEl.querySelector('canvas');
-      if(canvas) canvas.style.clipPath = 'inset(0 0 0 ' + pct + '%)';
+
+    // Clip the FROM container on its RIGHT side.
+    // inset(top right bottom left): right = (100-pct)% clips off the right portion.
+    // This means FROM is visible+interactive only in the LEFT half (0..pct%).
+    // The TO map (z-index:1 below) is naturally exposed in the RIGHT half (pct..100%).
+    // Crucially: clip-path clips BOTH visually AND pointer-events, so:
+    //   - clicks/scroll on left  → reach FROM map ✓
+    //   - clicks/scroll on right → pass through to TO map ✓
+    var fromDiv = document.getElementById('split-slider-from');
+    if(fromDiv) {
+      var rightClip = (100 - pct).toFixed(2) + '%';
+      fromDiv.style.clipPath        = 'inset(0 ' + rightClip + ' 0 0)';
+      fromDiv.style.webkitClipPath  = 'inset(0 ' + rightClip + ' 0 0)';
     }
-    handle.style.left = pct + '%';
+
+    // TO map: remove any clip — it sits at z-index:1 and is fully interactive
+    var toDiv = document.getElementById('split-slider-to');
+    if(toDiv) {
+      toDiv.style.clipPath       = '';
+      toDiv.style.webkitClipPath = '';
+    }
+    var toMapEl = document.getElementById('split-slider-to-map');
+    if(toMapEl) toMapEl.style.clipPath = '';
+
+    handle.style.left      = pct + '%';
     handle.style.transform = 'translateX(-50%)';
   }
+
   applyPct(pct);
 
   function onMove(clientX) {
     var rect = wrap.getBoundingClientRect();
     if(!rect.width) return;
-    applyPct(((clientX - rect.left) / rect.width) * 100);
+    var newPct = ((clientX - rect.left) / rect.width) * 100;
+    applyPct(newPct);
   }
 
   _splitSlider.dragging = false;
 
+  // ── Handle drag events ────────────────────────────────────────────────────
   handle.addEventListener('mousedown', function(e) {
     _splitSlider.dragging = true;
     e.preventDefault();
@@ -5960,18 +6021,21 @@ function _initSplitSlider() {
   document.addEventListener('touchmove', _splitSlider._touchmove, {passive: false});
   document.addEventListener('touchend',  _splitSlider._touchend);
 
-  // Click anywhere on wrap to jump slider
+  // Click on wrap (not handle, not popup) to jump slider position
   wrap.addEventListener('click', function(e) {
     if(e.target === handle || handle.contains(e.target)) return;
     if(e.target.closest && (e.target.closest('#split-click-popup') || e.target.closest('#split-key-card'))) return;
-    onMove(e.clientX);
+    if(!_splitSlider.dragging) onMove(e.clientX);
   });
 
-  // Re-apply clip whenever MapLibre redraws or resizes (canvas can be recreated)
-  function _reapply() { applyPct(_splitSlider.pct); }
+  // Re-apply clip after MapLibre resize on either map
+  function _reapply() { applyPct(_splitSlider.pct != null ? _splitSlider.pct : 50); }
+  if(splitState.mapFrom) {
+    splitState.mapFrom.on('resize', function(){ setTimeout(_reapply, 30); });
+    splitState.mapFrom.on('render', function(){ _reapply(); });
+  }
   if(splitState.mapTo) {
-    splitState.mapTo.on('render', _reapply);
-    splitState.mapTo.on('resize', function(){ setTimeout(_reapply, 50); });
+    splitState.mapTo.on('resize', function(){ setTimeout(_reapply, 30); });
   }
 
   _splitSlider.initialized = true;

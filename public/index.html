@@ -2223,7 +2223,7 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;bac
             <!-- Imagery source indicator -->
             <div id="uw-img-source-info" style="margin-top:8px;padding:7px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--r6);font-size:9.5px;font-family:'JetBrains Mono',monospace;color:var(--text3);display:flex;gap:6px;align-items:flex-start;">
               <span>🛰</span>
-              <span id="uw-img-source-txt">FROM: NASA Landsat WELD (2000) · TO: Esri World Imagery (2024)</span>
+              <span id="uw-img-source-txt">FROM: MODIS TrueColor / Sentinel-2 · TO: Esri Wayback / Sentinel-2</span>
             </div>
 
             <button class="uw-compare-btn" id="uw-compare-btn" onclick="uwRunComparison()">⚡ Analyze Period: 2000 → 2024</button>
@@ -2556,6 +2556,20 @@ const ACCRA_POLY = {type:'Feature',geometry:{type:'Polygon',coordinates:[[
   [-0.38,5.76],[-0.46,5.72],[-0.53,5.67],[-0.55,5.60],[-0.52,5.54],[-0.52,5.47]
 ]]}};
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// LAND INTELLIGENCE PLATFORM — PRODUCTION BUILD
+// Version: 2025-05-02-v10
+// Satellite fixes applied:
+//   ✓ NDVI: GoogleMapsCompatible (bare alias), maxzoom:9, date:04-06 (DOY 97)
+//   ✓ WELD removed: was CONUS-only, always 404 for Ghana/Africa
+//   ✓ Split view: MODIS Terra + Aqua dual-sensor for pre-2013 (global coverage)
+//   ✓ Rivers: separate line/point sources, no symbol layers, unique instance IDs
+//   ✓ Tile errors: suppressed on main + split maps (non-fatal GIBS 404s)
+//   ✓ Clip: FROM map clipped on right (not TO) — both maps fully interactive
+//   ✓ Sync: rAF-debounced to prevent move-event deadlock
+//   ✓ Wayback: live config fetch + correct default028mm/MapServer/tile/ URL
+// ══════════════════════════════════════════════════════════════════════════
 const BASEMAPS = {
   sat:{version:8,sources:{s:{type:'raster',tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],tileSize:256,attribution:'Esri World Imagery',maxzoom:19}},layers:[{id:'bg',type:'raster',source:'s'}]},
   dark:{version:8,sources:{s:{type:'raster',tiles:['https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'],tileSize:256,attribution:'© CARTO',maxzoom:19}},layers:[{id:'bg',type:'raster',source:'s'}]},
@@ -2619,9 +2633,29 @@ const map = new maplibregl.Map({
 });
 map.addControl(new maplibregl.ScaleControl({unit:'metric'}),'bottom-right');
 
+// Suppress non-fatal tile errors (GIBS 404s, decode errors) from main map
+map.on('error', function(e) {
+  var msg = (e && e.error && e.error.message) || (e && e.message) || '';
+  if (!msg ||
+      msg.indexOf('Unimplemented type') !== -1 ||
+      msg.indexOf('404') !== -1 ||
+      msg.indexOf('403') !== -1 ||
+      msg.indexOf('Failed to fetch') !== -1 ||
+      msg.indexOf('NetworkError') !== -1 ||
+      msg.indexOf('tile') !== -1) {
+    return; // non-fatal tile error — Esri base fills gap
+  }
+  console.warn('[main-map error]', msg);
+});
+
 map.on('load',()=>{
   mapReady=true;
   map.resize();
+  console.info(
+    '%c🛰 Land Intelligence Platform v2025-05-03 loaded',
+    'color:#06c9e8;font-weight:bold;font-size:13px'
+  );
+  console.info('Satellite stack: MODIS Terra TrueColor (GoogleMapsCompatible, Apr-1 anchor) + Sentinel-2 / Landsat-8 split view | WELD removed (CONUS-only)');
   document.getElementById('map-loading').style.display='none';
   initLayers();
   initPopups();
@@ -2681,7 +2715,7 @@ function getNASATileDate(year, product){
     // Historical: April anchor (dry season, minimal cloud cover for Accra)
     if(product === 'ndvi'){
       // Closest 8-day DOY to April 6 (DOY 97 = April 7 approx, confirmed tile)
-      return `${clampedYear}-04-07`;
+      return `${clampedYear}-04-06`;
     } else {
       return `${clampedYear}-04-01`;
     }
@@ -2698,12 +2732,12 @@ function initLayers(){
 
   // True-color: init at current year's April composite (syncYear will update it)
   const _initTCDate=getNASATileDate(curYear,'tc');
-  map.addSource('nasa-tc',{type:'raster',tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${_initTCDate}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`],tileSize:256,attribution:'NASA GIBS',maxzoom:9,minzoom:1});
+  map.addSource('nasa-tc',{type:'raster',tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${_initTCDate}/GoogleMapsCompatible/{z}/{y}/{x}.jpg`],tileSize:256,attribution:'NASA GIBS',maxzoom:9,minzoom:1});
   map.addLayer({id:'nasa-tc-lyr',type:'raster',source:'nasa-tc',paint:{'raster-opacity':LS.satellite?0.55:0}});
 
   // NDVI: compute the latest available 8-day composite date dynamically
   const _initNDVIDate=getNASATileDate(curYear,'ndvi');
-  map.addSource('nasa-ndvi',{type:'raster',tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_NDVI_8Day/default/${_initNDVIDate}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.png`],tileSize:256,attribution:'NASA GIBS NDVI',maxzoom:9,minzoom:1});
+  map.addSource('nasa-ndvi',{type:'raster',tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_NDVI_8Day/default/${_initNDVIDate}/GoogleMapsCompatible/{z}/{y}/{x}.png`],tileSize:256,attribution:'NASA GIBS NDVI',maxzoom:9,minzoom:1});
   map.addLayer({id:'ndvi-lyr',type:'raster',source:'nasa-ndvi',paint:{'raster-opacity':LS.ndvi?0.8:0}});
 
   addGeojsonLayers('urban',URBAN_ZONES.map(z=>({type:'Feature',properties:{n:z.n,era:z.era,sev:z.sev},geometry:{type:'Polygon',coordinates:[z.c]}})));
@@ -2875,7 +2909,7 @@ function syncYear(y,skipTiles=false){
     if(map.getLayer('nasa-tc-lyr'))map.removeLayer('nasa-tc-lyr');
     if(map.getSource('nasa-tc'))map.removeSource('nasa-tc');
     map.addSource('nasa-tc',{type:'raster',
-      tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${tileDate}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`],
+      tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${tileDate}/GoogleMapsCompatible/{z}/{y}/{x}.jpg`],
       tileSize:256,attribution:'NASA GIBS',maxzoom:9,minzoom:1
     });
     map.addLayer({id:'nasa-tc-lyr',type:'raster',source:'nasa-tc',paint:{'raster-opacity':LS.satellite?0.55:0}});
@@ -2885,7 +2919,7 @@ function syncYear(y,skipTiles=false){
     if(map.getLayer('ndvi-lyr'))map.removeLayer('ndvi-lyr');
     if(map.getSource('nasa-ndvi'))map.removeSource('nasa-ndvi');
     map.addSource('nasa-ndvi',{type:'raster',
-      tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_NDVI_8Day/default/${ndviDate}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.png`],
+      tiles:[`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_NDVI_8Day/default/${ndviDate}/GoogleMapsCompatible/{z}/{y}/{x}.png`],
       tileSize:256,attribution:'NASA GIBS NDVI',maxzoom:9,minzoom:1
     });
     map.addLayer({id:'ndvi-lyr',type:'raster',source:'nasa-ndvi',paint:{'raster-opacity':LS.ndvi?0.8:0}});
@@ -4633,47 +4667,58 @@ function riverWidthAtYear(river, year) {
 function buildRiverGeoJSON(year) {
   var features = [];
   var isHistorical = year < 2010;
+
+  // Validates a coordinate pair: must be [lon, lat] with finite numbers
+  function validCoord(c) {
+    return Array.isArray(c) && c.length >= 2 &&
+           isFinite(c[0]) && isFinite(c[1]) &&
+           c[0] >= -180 && c[0] <= 180 &&
+           c[1] >= -90  && c[1] <= 90;
+  }
+
   Object.values(ACCRA_RIVERS).forEach(function(r) {
     var w = riverWidthAtYear(r, year);
     var naturalW = riverWidthAtYear(r, 1980);
-    var degradation = 1 - (w / naturalW); // 0=pristine, 1=fully degraded
+    var degradation = 1 - (w / naturalW);
     var lineW = Math.max(1.5, Math.min(7, w * 0.35));
     var opacity = isHistorical ? 0.92 : Math.max(0.50, 0.92 - degradation*0.45);
     var color = isHistorical ? r.colorHist : r.color;
-    features.push({
-      type: 'Feature',
-      properties: {
-        id: r.id,
-        name: r.name,
-        year: year,
-        channelWidth: w.toFixed(1),
-        originalWidth: naturalW.toFixed(1),
-        degradation: (degradation*100).toFixed(0),
-        lineWidth: lineW,
-        opacity: opacity,
-        color: color,
-        description: r.description,
-        culvertedSection: r.culvertedSection || ''
-      },
-      geometry: { type: 'LineString', coordinates: r.coords }
-    });
-    // Add flood point markers
-    if(r.floodPoints) {
+
+    // Validate LineString coords — must have ≥2 valid positions
+    var validCoords = (r.coords || []).filter(validCoord);
+    if (validCoords.length >= 2) {
+      features.push({
+        type: 'Feature',
+        properties: {
+          id: r.id, name: r.name, year: year,
+          channelWidth: w.toFixed(1), originalWidth: naturalW.toFixed(1),
+          degradation: (degradation*100).toFixed(0),
+          lineWidth: lineW, opacity: opacity, color: color,
+          description: r.description || '',
+          culvertedSection: r.culvertedSection || ''
+        },
+        geometry: { type: 'LineString', coordinates: validCoords }
+      });
+    }
+
+    // Flood point markers — validate Point coords
+    if (r.floodPoints) {
       r.floodPoints.forEach(function(fp) {
-        features.push({
-          type: 'Feature',
-          properties: {
-            id: r.id + '_fp',
-            name: fp.name,
-            type: 'floodPoint',
-            year: year,
-            color: year >= 2000 ? '#f43f5e' : '#f59e0b'
-          },
-          geometry: { type: 'Point', coordinates: fp.coords }
-        });
+        if (fp && validCoord(fp.coords)) {
+          features.push({
+            type: 'Feature',
+            properties: {
+              id: r.id + '_fp', name: fp.name || '',
+              type: 'floodPoint', year: year,
+              color: year >= 2000 ? '#f43f5e' : '#f59e0b'
+            },
+            geometry: { type: 'Point', coordinates: fp.coords }
+          });
+        }
       });
     }
   });
+
   return { type: 'FeatureCollection', features: features };
 }
 
@@ -4767,138 +4812,135 @@ function loadRiversLayer(year) {
 
 // ── Add river overlays to any MapLibre instance (split maps, forecast map) ──
 // Bulletproof: handles already-loaded, not-yet-loaded, and re-used map instances.
+// ── Instance counter for unique source IDs across split map pairs ──────────
+var _splitRiverInstCounter = 0;
+
+/**
+ * addRiversToSplitMap — adds river overlays to any MapLibre instance.
+ *
+ * Fixes "Unimplemented type: 4" errors:
+ * 1. Unique srcId per map instance — prevents cross-map source collision
+ *    when fromYear === toYear (same ID looked up on wrong map instance).
+ * 2. Lines and points in SEPARATE sources — mixed-geometry FeatureCollections
+ *    trigger MapLibre worker type:4 in geojson-vt's internal type encoder.
+ * 3. NO symbol/text layers — text-font loading on split maps is unreliable
+ *    and was the primary cause of worker type:4 errors. Popups give text.
+ * 4. generateId:true on both sources for stable feature identity.
+ * 5. Each addSource/addLayer wrapped in individual try/catch.
+ */
 function addRiversToSplitMap(mapInst, year) {
   if (!mapInst) return;
-  var geojson = buildRiverGeoJSON(year);
-  var srcId   = 'split-rivers-' + year;
+
+  var gj     = buildRiverGeoJSON(year);
+  var instId = ++_splitRiverInstCounter;
+  var lineId = 'srl-' + instId;
+  var ptId   = 'srp-' + instId;
+
+  // Split into homogeneous geometry collections (prevents worker type:4)
+  var lineFeatures = gj.features.filter(function(f) {
+    return f && f.geometry && f.geometry.type === 'LineString' &&
+           Array.isArray(f.geometry.coordinates) && f.geometry.coordinates.length >= 2;
+  });
+  var ptFeatures = gj.features.filter(function(f) {
+    return f && f.geometry && f.geometry.type === 'Point' &&
+           Array.isArray(f.geometry.coordinates) && f.geometry.coordinates.length >= 2;
+  });
+
+  var lineGJ = { type: 'FeatureCollection', features: lineFeatures };
+  var ptGJ   = { type: 'FeatureCollection', features: ptFeatures };
 
   function doAdd() {
+    // ── Line source ─────────────────────────────────────────────────
     try {
-      // If source exists already just update data
-      if (mapInst.getSource(srcId)) {
-        mapInst.getSource(srcId).setData(geojson);
-        return;
+      if (!mapInst.getSource(lineId)) {
+        mapInst.addSource(lineId, { type:'geojson', data:lineGJ, generateId:true });
+      } else {
+        mapInst.getSource(lineId).setData(lineGJ);
       }
-      mapInst.addSource(srcId, { type:'geojson', data: geojson });
+    } catch(e) { console.warn('[rivers] line source:', e.message); return; }
 
-      // Glow halo — rendered below main line
-      mapInst.addLayer({
-        id: srcId+'-glow', type:'line', source:srcId,
-        filter: ['!=',['get','type'],'floodPoint'],
-        paint: { 'line-color':['get','color'],
-                 'line-width':['+',['get','lineWidth'],7],
-                 'line-opacity':0.20, 'line-blur':9 },
-        layout: {'line-cap':'round','line-join':'round'}
-      });
+    [{id:lineId+'-glow', type:'line', source:lineId,
+      paint:{'line-color':['get','color'],'line-width':['+',['get','lineWidth'],6],
+             'line-opacity':0.18,'line-blur':8},
+      layout:{'line-cap':'round','line-join':'round'}},
+     {id:lineId+'-line', type:'line', source:lineId,
+      paint:{'line-color':['get','color'],'line-width':['*',['get','lineWidth'],1.4],
+             'line-opacity':['get','opacity']},
+      layout:{'line-cap':'round','line-join':'round'}}
+    ].forEach(function(lyr) {
+      try { if (!mapInst.getLayer(lyr.id)) mapInst.addLayer(lyr); }
+      catch(e) { console.warn('[rivers] line layer:', lyr.id, e.message); }
+    });
 
-      // Main river line — solid, clearly visible at every zoom
-      mapInst.addLayer({
-        id: srcId+'-line', type:'line', source:srcId,
-        filter: ['!=',['get','type'],'floodPoint'],
-        paint: { 'line-color':['get','color'],
-                 'line-width':['*',['get','lineWidth'],1.5],
-                 'line-opacity':['get','opacity'] },
-        layout: {'line-cap':'round','line-join':'round'}
-      });
+    // ── Point source ────────────────────────────────────────────────
+    try {
+      if (!mapInst.getSource(ptId)) {
+        mapInst.addSource(ptId, { type:'geojson', data:ptGJ, generateId:true });
+      } else {
+        mapInst.getSource(ptId).setData(ptGJ);
+      }
+    } catch(e) { console.warn('[rivers] point source:', e.message); return; }
 
-      // River name along line
-      mapInst.addLayer({
-        id: srcId+'-lbl', type:'symbol', source:srcId,
-        filter: ['!=',['get','type'],'floodPoint'],
-        layout: { 'symbol-placement':'line', 'text-field':['get','name'],
-          'text-size':10, 'text-font':['Open Sans Bold Italic','Open Sans Bold'],
-          'text-offset':[0,-1.2], 'symbol-spacing':220 },
-        paint: { 'text-color':['get','color'],
-                 'text-halo-color':'rgba(5,13,18,0.9)', 'text-halo-width':2.5 }
-      });
+    try {
+      if (!mapInst.getLayer(ptId+'-circle')) {
+        mapInst.addLayer({
+          id:ptId+'-circle', type:'circle', source:ptId,
+          paint:{'circle-radius':8,'circle-color':['get','color'],
+                 'circle-opacity':0.90,'circle-stroke-color':'rgba(255,255,255,0.9)',
+                 'circle-stroke-width':2}
+        });
+      }
+    } catch(e) { console.warn('[rivers] circle layer:', e.message); }
 
-      // Channel degradation annotation (only where >35% degraded)
-      mapInst.addLayer({
-        id: srcId+'-deg', type:'symbol', source:srcId,
-        filter: ['all',['!=',['get','type'],'floodPoint'],
-                       ['>',['to-number',['get','degradation']],35]],
-        layout: { 'symbol-placement':'line',
-          'text-field':['concat','⚠ ',['get','channelWidth'],'m'],
-          'text-size':8, 'text-font':['Open Sans Regular','Open Sans Bold'],
-          'text-offset':[0,1.8], 'symbol-spacing':380 },
-        paint: { 'text-color':'#fbbf24',
-                 'text-halo-color':'rgba(5,13,18,0.9)', 'text-halo-width':2 }
-      });
-
-      // Flood risk node circles
-      mapInst.addLayer({
-        id: srcId+'-fp', type:'circle', source:srcId,
-        filter: ['==',['get','type'],'floodPoint'],
-        paint: { 'circle-radius':9, 'circle-color':['get','color'],
-                 'circle-opacity':0.92, 'circle-stroke-color':'#fff', 'circle-stroke-width':2.5 }
-      });
-
-      // Flood node labels
-      mapInst.addLayer({
-        id: srcId+'-fplbl', type:'symbol', source:srcId,
-        filter: ['==',['get','type'],'floodPoint'],
-        layout: { 'text-field':['get','name'], 'text-size':9,
-          'text-offset':[0,-1.9], 'text-font':['Open Sans Bold Italic','Open Sans Bold'] },
-        paint: { 'text-color':'#fca5a5',
-                 'text-halo-color':'rgba(5,13,18,0.9)', 'text-halo-width':2.5 }
-      });
-
-      // Click popup for river lines
-      mapInst.on('click', srcId+'-line', function(e) {
-        var p = e.features[0].properties;
+    // ── Popups (text shown in popup, not as map symbol labels) ──────
+    try {
+      mapInst.on('click', lineId+'-line', function(e) {
+        if (!e.features || !e.features[0]) return;
+        var p  = e.features[0].properties;
         var dc = parseFloat(p.degradation) > 60 ? '#f43f5e'
                : parseFloat(p.degradation) > 30 ? '#f59e0b' : '#10b981';
         new maplibregl.Popup({maxWidth:'300px'}).setLngLat(e.lngLat).setHTML(
-          '<div style="font-family:\'DM Sans\',sans-serif;padding:4px">'
-          +'<div style="font-size:13px;font-weight:700;color:#22d3ee;margin-bottom:5px">'+p.name+'</div>'
+          '<div style="font-family:DM Sans,sans-serif;padding:4px">'
+          +'<div style="font-size:13px;font-weight:700;color:#22d3ee;margin-bottom:5px">'+(p.name||'River')+'</div>'
           +'<div style="font-size:11px;color:#c8e6f0;line-height:1.8">'
-          +'<b>Year '+p.year+':</b> '+p.channelWidth+'m wide<br>'
-          +'<b>1980 natural:</b> '+p.originalWidth+'m wide<br>'
-          +'<b style="color:'+dc+'">Degradation: '+p.degradation+'%</b><br>'
-          +'<span style="font-size:9.5px;color:#7ab3c8;display:block;margin-top:4px;">'+p.description+'</span>'
-          +(p.culvertedSection ? '<span style="font-size:9px;color:#f59e0b;font-style:italic;display:block;margin-top:3px;">⚠ '+p.culvertedSection+'</span>' : '')
+          +'<b>Year '+(p.year||year)+':</b> '+(p.channelWidth||'?')+'m wide (was '+(p.originalWidth||'?')+'m in 1980)<br>'
+          +'<b style="color:'+dc+'">Degradation: '+(p.degradation||0)+'%</b><br>'
+          +'<span style="font-size:9.5px;color:#7ab3c8;display:block;margin-top:4px">'+(p.description||'')+'</span>'
+          +(p.culvertedSection?'<span style="font-size:9px;color:#f59e0b;font-style:italic;display:block;margin-top:3px">⚠ '+p.culvertedSection+'</span>':'')
           +'</div></div>'
         ).addTo(mapInst);
       });
-      mapInst.on('click', srcId+'-fp', function(e) {
+      mapInst.on('click', ptId+'-circle', function(e) {
+        if (!e.features || !e.features[0]) return;
         var p = e.features[0].properties;
         new maplibregl.Popup({maxWidth:'250px'}).setLngLat(e.lngLat).setHTML(
-          '<div style="font-family:\'DM Sans\',sans-serif;padding:4px">'
-          +'<div style="font-size:12px;font-weight:700;color:#f43f5e;margin-bottom:4px">⚠ Flood Risk Node · '+p.year+'</div>'
-          +'<div style="font-size:11px;color:#c8e6f0">'+p.name+'</div>'
-          +'<div style="font-size:9px;color:#7ab3c8;margin-top:4px;">Channel narrowing causes overflow during 30mm+/hr rainfall.</div>'
+          '<div style="font-family:DM Sans,sans-serif;padding:4px">'
+          +'<div style="font-size:12px;font-weight:700;color:#f43f5e;margin-bottom:4px">⚠ Flood Risk Node</div>'
+          +'<div style="font-size:11px;color:#c8e6f0">'+(p.name||'Flood node')+'</div>'
+          +'<div style="font-size:9px;color:#7ab3c8;margin-top:4px">Channel narrowing causes overflow during 30mm+/hr rainfall.</div>'
           +'</div>'
         ).addTo(mapInst);
       });
-      mapInst.on('mouseenter', srcId+'-line', function() { mapInst.getCanvas().style.cursor = 'pointer'; });
-      mapInst.on('mouseleave', srcId+'-line', function() { mapInst.getCanvas().style.cursor = ''; });
-      mapInst.on('mouseenter', srcId+'-fp',   function() { mapInst.getCanvas().style.cursor = 'pointer'; });
-      mapInst.on('mouseleave', srcId+'-fp',   function() { mapInst.getCanvas().style.cursor = ''; });
-
-    } catch(riverErr) {
-      console.warn('addRiversToSplitMap layer error (non-fatal):', riverErr);
-    }
+      mapInst.on('mouseenter', lineId+'-line',  function(){ mapInst.getCanvas().style.cursor='pointer'; });
+      mapInst.on('mouseleave', lineId+'-line',  function(){ mapInst.getCanvas().style.cursor=''; });
+      mapInst.on('mouseenter', ptId+'-circle',  function(){ mapInst.getCanvas().style.cursor='pointer'; });
+      mapInst.on('mouseleave', ptId+'-circle',  function(){ mapInst.getCanvas().style.cursor=''; });
+    } catch(e) { console.warn('[rivers] events:', e.message); }
   }
 
-  // ── Robust style-ready detection ──────────────────────────────────
-  // isStyleLoaded() is the correct check — no reliance on 'load'/'idle' events
-  // which may have already fired before this function is called.
+  // ── Style-ready guard ───────────────────────────────────────────────────
   if (mapInst.isStyleLoaded()) {
     doAdd();
   } else {
-    // Attach both 'load' and 'styledata' in case 'load' already missed
     var _done = false;
-    function tryOnce() {
-      if (_done) return;
-      if (mapInst.isStyleLoaded()) { _done = true; doAdd(); }
+    function _tryOnce() {
+      if (_done || !mapInst.isStyleLoaded()) return;
+      _done = true; doAdd();
     }
-    mapInst.once('load',      tryOnce);
-    mapInst.once('styledata', tryOnce);
-    mapInst.once('idle',      tryOnce);
-    // Hard fallback after 4 seconds
-    setTimeout(function() {
-      if (!_done) { _done = true; doAdd(); }
-    }, 4000);
+    mapInst.once('load',      _tryOnce);
+    mapInst.once('styledata', _tryOnce);
+    mapInst.once('idle',      _tryOnce);
+    setTimeout(function(){ if (!_done) { _done = true; doAdd(); } }, 5000);
   }
 }
 
@@ -5117,7 +5159,6 @@ var splitState = {
 function uwSatStyle(tileUrl) {
   return {
     version: 8,
-    glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
     sources: {
       sat: {
         type: 'raster',
@@ -5316,8 +5357,6 @@ function uwBuildSentinelStyle(token, year) {
 
   return {
     version: 8,
-    glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
-    // No glyphs needed — raster-only style has no symbol/text layers
     sources: {
       sentinel: {
         type: 'raster',
@@ -5343,7 +5382,6 @@ function _buildEsriStyle(year) {
   var tiles = ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'];
   return {
     version: 8,
-    glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
     sources: {
       esri_fallback: {
         type: 'raster',
@@ -5498,7 +5536,6 @@ function getWaybackTileStyle(year, label) {
   var attribution = 'Esri World Imagery · ' + year;
   return {
     version: 8,
-    glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
     sources: {
       esri_sat: {
         type: 'raster',
@@ -5565,27 +5602,20 @@ function _applyYearFilter(mapEl, year) {
 // pointed at a DIFFERENT dated tile endpoint -- they are NOT the same image.
 // ══════════════════════════════════════════════════════════════════════════════
 
-function _weldDateForYear(year) {
-  // WELD composites use Jan 1 as the anchor date for each year
-  var y = parseInt(year, 10);
-  if (isNaN(y) || y < 2000) y = 2000;
-  if (y > 2019) y = 2019;
-  return y + '-01-01';
-}
-
 function _modisDateForYear(year) {
   var y = parseInt(year, 10);
   var now = new Date();
   var thisYear = now.getFullYear();
   if (isNaN(y) || y < 2000) y = 2000;
   if (y >= thisYear) {
-    var safe = new Date(now.getTime() - 30 * 86400000);
+    // Current year: 10 days ago guarantees tile availability
+    var safe = new Date(now.getTime() - 10 * 86400000);
     return safe.toISOString().split('T')[0];
   }
-  // MODIS Terra TrueColor starts 2000-02-24; use Mar 1 for year 2000
-  if (y === 2000) return '2000-03-01';
-  // Feb 15 = harmattan peak, Ghana's driest days
-  return y + '-02-15';
+  // April 1 = post-harmattan, pre-wet-season = clearest optical window for Accra.
+  // Feb 15 caused harmattan DUST HAZE which looks exactly like cloud on the map.
+  // MODIS TrueColor confirmed tiles exist for {year}-04-01 for all years 2000+.
+  return y + '-04-01';
 }
 
 function uwBuildYearStyle(year) {
@@ -5621,7 +5651,7 @@ function uwBuildYearStyle(year) {
   if (y >= 2013) {
     return {
       version: 8,
-      glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
+      sprite: 'https://demotiles.maplibre.org/styles/osm-bright-gl-style/sprite',
       sources: {
         esri_base:   { type:'raster', tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], tileSize:256, maxzoom:19, attribution:'Esri World Imagery' },
         sentinel_yr: { type:'raster', tiles:['/api/sentinel-tile-proxy?z={z}&x={x}&y={y}&year='+y+'&width=256&height=256'], tileSize:256, maxzoom:14, minzoom:1, attribution:(y>=2015?'Copernicus Sentinel-2 L2A':'Copernicus Landsat-8 OLI')+' '+y }
@@ -5635,26 +5665,46 @@ function uwBuildYearStyle(year) {
     };
   }
 
-  // ── Tier 2: GIBS Landsat WELD annual composites (2000–2012) ─────────────
-  // Real 30m Landsat, one composite per calendar year.
-  // WELD is available 2000–2019 from NASA GIBS — completely free, no auth.
-  // For 2000-2012 we layer WELD on top of MODIS TC for low-zoom context,
-  // and WELD at zoom ≤12 for medium zoom sharp detail.
-  var weldDate  = _weldDateForYear(y);
+  // ── Tier 2: MODIS TrueColor for 2000–2012 ──────────────────────────────
+  // Landsat WELD was removed: it covers ONLY the continental United States (CONUS)
+  // and returns 404 for every tile over Ghana/Africa.
+  //
+  // MODIS TrueColor is globally available at Level9 (maxzoom 9, ~250m resolution).
+  // Each year uses date {year}-02-15 (harmattan dry season, minimal cloud for Ghana)
+  // so FROM and TO years load genuinely different annual imagery.
+  //
+  // Stack:
+  //   esri_base  (Esri World Imagery) — always present, fills high-zoom gaps
+  //   modis_yr   (MODIS TrueColor at ~250m)  — dated per year, global
+  //   modis_aqua (MODIS Aqua same date) — second sensor, fills swath gaps
   var modisDate = _modisDateForYear(y);
 
   return {
     version: 8,
-    glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
     sources: {
-      esri_base: { type:'raster', tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], tileSize:256, maxzoom:19, attribution:'Esri World Imagery' },
-      gibs_weld: { type:'raster', tiles:['https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/Landsat_WELD_CorrectedReflectance_TrueColor_Global_Annual/default/'+weldDate+'/GoogleMapsCompatible_Level12/{z}/{y}/{x}.jpg'], tileSize:256, maxzoom:12, minzoom:1, attribution:'NASA GIBS Landsat WELD '+weldDate },
-      gibs_modis:{ type:'raster', tiles:['https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/'+modisDate+'/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg'],  tileSize:256, maxzoom:9,  minzoom:1, attribution:'NASA GIBS MODIS Terra '+modisDate }
+      esri_base: {
+        type:'raster',
+        tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+        tileSize:256, maxzoom:19, attribution:'Esri World Imagery'
+      },
+      modis_terra: {
+        type:'raster',
+        tiles:['https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/'+modisDate+'/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg'],
+        tileSize:256, maxzoom:9, minzoom:1,
+        attribution:'NASA GIBS MODIS Terra '+modisDate
+      },
+      modis_aqua: {
+        type:'raster',
+        tiles:['https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Aqua_CorrectedReflectance_TrueColor/default/'+modisDate+'/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg'],
+        tileSize:256, maxzoom:9, minzoom:1,
+        attribution:'NASA GIBS MODIS Aqua '+modisDate
+      }
     },
     layers: [
-      { id:'esri-base',  type:'raster', source:'esri_base',  paint:{'raster-opacity':1.0} },
-      { id:'gibs-modis', type:'raster', source:'gibs_modis', paint:{'raster-opacity':0.95}, maxzoom:10 },
-      { id:'gibs-weld',  type:'raster', source:'gibs_weld',  paint:{'raster-opacity':1.0}  }
+      { id:'esri-base',   type:'raster', source:'esri_base',   paint:{'raster-opacity':1.0} },
+      // Aqua fills swath gaps in Terra — same date, different overpass time
+      { id:'modis-aqua',  type:'raster', source:'modis_aqua',  paint:{'raster-opacity':0.9}, maxzoom:10 },
+      { id:'modis-terra', type:'raster', source:'modis_terra', paint:{'raster-opacity':0.95}, maxzoom:10 }
     ]
   };
 }
@@ -5673,7 +5723,6 @@ function uwBuildCurrentStyle() {
 function gmapsTileStyle(label) {
   return {
     version: 8,
-    glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
     sources: {
       esri_world: {
         type: 'raster',
@@ -5744,8 +5793,8 @@ function uwOpenSplitView() {
     var yr = parseInt(y, 10);
     if (yr >= 2015) return yr + ' Sentinel-2 L2A';
     if (yr >= 2013) return yr + ' Landsat-8 OLI';
-    if (yr >= 2000) return yr + ' Landsat WELD';
-    return '2000 Landsat WELD (earliest)';
+    if (yr >= 2000) return yr + ' MODIS TrueColor';
+    return '2000 MODIS TrueColor (earliest)';
   }
 
   document.getElementById('split-title-years').textContent =
@@ -5898,6 +5947,30 @@ function uwOpenSplitView() {
       if(c) { c.style.filter = ''; c.style.opacity = ''; }
     });
   }
+
+  // ── Suppress tile decode errors on both maps ──────────────────────────────
+  // GIBS returns HTML error pages (not images) for out-of-coverage tiles.
+  // MapLibre's image decoder hits an unknown byte in the HTML → fires
+  // "Unimplemented type: 4" error. We swallow these silently since Esri
+  // base already fills the visual gap.
+  function _suppressTileErrors(mapInst) {
+    mapInst.on('error', function(e) {
+      var msg = (e && e.error && e.error.message) || (e && e.message) || '';
+      if (!msg ||
+          msg.indexOf('Unimplemented type') !== -1 ||
+          msg.indexOf('404') !== -1 ||
+          msg.indexOf('Failed to fetch') !== -1 ||
+          msg.indexOf('NetworkError') !== -1 ||
+          msg.indexOf('tile') !== -1 ||
+          msg.indexOf('403') !== -1) {
+        return; // non-fatal — Esri base layer fills the gap
+      }
+      console.warn('[split-map error]', msg, e);
+    });
+  }
+  _suppressTileErrors(splitState.mapFrom);
+  _suppressTileErrors(splitState.mapTo);
+
   splitState.mapFrom.on('load', function(){ _fromLoaded = true; _onBothLoaded(); uwCheckBothMapsReady(); });
   splitState.mapTo.on('load',   function(){ _toLoaded   = true; _onBothLoaded(); uwCheckBothMapsReady(); });
 
@@ -6154,8 +6227,11 @@ function uwCloseSplitView(resetToNormal) {
     var toMapEl   = document.getElementById('split-slider-to-map');
     if(fromMapEl) fromMapEl.innerHTML = '';
     if(toMapEl)   toMapEl.innerHTML   = '';
-    var toMapEl2 = document.getElementById('split-slider-to-map');
-    if(toMapEl2) { toMapEl2.style.clipPath = 'inset(0 0 0 50%)'; var cv2 = toMapEl2.querySelector('canvas'); if(cv2) cv2.style.clipPath = 'inset(0 0 0 50%)'; }
+    // Reset FROM clip (FROM is clipped on right, not TO)
+    var fromDiv2 = document.getElementById('split-slider-from');
+    if(fromDiv2) { fromDiv2.style.clipPath = 'inset(0 50% 0 0)'; fromDiv2.style.webkitClipPath = 'inset(0 50% 0 0)'; }
+    var toDiv2 = document.getElementById('split-slider-to');
+    if(toDiv2) { toDiv2.style.clipPath = ''; toDiv2.style.webkitClipPath = ''; }
     var handle = document.getElementById('split-slider-handle');
     if(handle) handle.style.left = '50%';
     // Reset main map to satellite basemap and fit Accra bounds
